@@ -89,6 +89,14 @@ export function buildJobEmbed(job: JobRecord): EmbedBuilder {
     );
   }
 
+  if (job.discord_thread_id) {
+    embed.addFields({
+      name: "log_thread",
+      value: `<#${job.discord_thread_id}>`,
+      inline: false,
+    });
+  }
+
   return embed.setTimestamp(new Date(job.updated_at));
 }
 

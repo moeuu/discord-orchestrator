@@ -6,6 +6,7 @@ import type {
 import { Events, MessageFlags } from "discord.js";
 
 import type { AppConfig } from "../config.js";
+import { createJobLogStreamer } from "./logStream.js";
 import type { JobStore } from "../jobs/store.js";
 import type { Logger } from "../util/logger.js";
 import type { JobRecord, RunnerTarget } from "../jobs/types.js";
@@ -18,6 +19,7 @@ import type { createJobService } from "../jobs/service.js";
 
 type JobService = ReturnType<typeof createJobService>;
 type UpdateJobMessage = (job: JobRecord) => Promise<void>;
+type StreamJobLogs = (job: JobRecord) => Promise<void>;
 
 export function attachInteractionHandlers(
   client: Client,
@@ -27,6 +29,7 @@ export function attachInteractionHandlers(
   jobs: JobService,
 ): void {
   const jobMessages = createJobMessageUpdater(client, logger);
+  const logStreamer = createJobLogStreamer(client, store, logger);
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) {
@@ -40,6 +43,7 @@ export function attachInteractionHandlers(
         store,
         jobs,
         jobMessages.updateJobMessage,
+        logStreamer.streamJobLogs,
       );
       if (response) {
         await interaction.reply(response);
@@ -63,6 +67,7 @@ async function handleSlashCommand(
   store: JobStore,
   jobs: JobService,
   updateJobMessage: UpdateJobMessage,
+  streamJobLogs: StreamJobLogs,
 ): Promise<InteractionReplyOptions | null> {
   switch (interaction.commandName) {
     case "ping":
@@ -76,6 +81,7 @@ async function handleSlashCommand(
         store,
         jobs,
         updateJobMessage,
+        streamJobLogs,
       );
     default:
       return {
@@ -117,6 +123,7 @@ async function handleAutopilotCommand(
   store: JobStore,
   jobs: JobService,
   updateJobMessage: UpdateJobMessage,
+  streamJobLogs: StreamJobLogs,
 ): Promise<InteractionReplyOptions | null> {
   const subcommand = interaction.options.getSubcommand();
 
@@ -133,6 +140,7 @@ async function handleAutopilotCommand(
         store,
         jobs,
         updateJobMessage,
+        streamJobLogs,
       );
       return null;
     case "logs":
@@ -176,6 +184,7 @@ async function handleAutopilotRun(
   store: JobStore,
   jobs: JobService,
   updateJobMessage: UpdateJobMessage,
+  streamJobLogs: StreamJobLogs,
 ): Promise<void> {
   const competition = interaction.options.getString("competition", true);
   const instruction = interaction.options.getString("instruction", true);
@@ -209,6 +218,7 @@ async function handleAutopilotRun(
 
   void jobs.startAutopilotJob(job.id, async (updatedJob) => {
     await updateJobMessage(updatedJob);
+    await streamJobLogs(updatedJob);
   });
 }
 
