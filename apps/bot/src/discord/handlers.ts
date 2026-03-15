@@ -9,8 +9,14 @@ import type { AppConfig } from "../config.js";
 import { createJobStore, type JobStore } from "../jobs/store.js";
 import { createJobService } from "../jobs/service.js";
 import type { Logger } from "../util/logger.js";
-import type { RunnerTarget } from "../jobs/types.js";
-import { buildJobEmbed, buildJobStatusReply } from "./ui.js";
+import type { JobRecord, RunnerTarget } from "../jobs/types.js";
+import {
+  buildJobEmbed,
+  buildJobStatusReply,
+  createJobMessageUpdater,
+} from "./ui.js";
+
+type UpdateJobMessage = (job: JobRecord) => Promise<void>;
 
 export function attachInteractionHandlers(
   client: Client,
@@ -19,6 +25,7 @@ export function attachInteractionHandlers(
 ): void {
   const store = createJobStore(config.jobDataDir);
   const jobs = createJobService(store, config.logDir, logger);
+  const jobMessages = createJobMessageUpdater(client, logger);
 
   // Only slash command interactions are handled in this bot.
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -27,7 +34,12 @@ export function attachInteractionHandlers(
     }
 
     try {
-      const response = await handleSlashCommand(interaction, store, jobs);
+      const response = await handleSlashCommand(
+        interaction,
+        store,
+        jobs,
+        jobMessages.updateJobMessage,
+      );
       if (response) {
         await interaction.reply(response);
       }
@@ -48,12 +60,13 @@ async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
   store: JobStore,
   jobs: ReturnType<typeof createJobService>,
+  updateJobMessage: UpdateJobMessage,
 ): Promise<InteractionReplyOptions | null> {
   switch (interaction.commandName) {
     case "ping":
       return { content: "pong" };
     case "codex":
-      return await handleCodexCommand(interaction, store, jobs);
+      return await handleCodexCommand(interaction, store, jobs, updateJobMessage);
     default:
       return {
         content: "未対応のコマンドです。",
@@ -66,6 +79,7 @@ async function handleCodexCommand(
   interaction: ChatInputCommandInteraction,
   store: JobStore,
   jobs: ReturnType<typeof createJobService>,
+  updateJobMessage: UpdateJobMessage,
 ): Promise<InteractionReplyOptions | null> {
   const subcommand = interaction.options.getSubcommand();
 
@@ -76,7 +90,7 @@ async function handleCodexCommand(
       return buildJobStatusReply(job);
     }
     case "run":
-      await handleCodexRun(interaction, store, jobs);
+      await handleCodexRun(interaction, store, jobs, updateJobMessage);
       return null;
     case "logs": {
       const jobId = interaction.options.getString("job_id", true);
@@ -127,6 +141,7 @@ async function handleCodexRun(
   interaction: ChatInputCommandInteraction,
   store: JobStore,
   jobs: ReturnType<typeof createJobService>,
+  updateJobMessage: UpdateJobMessage,
 ): Promise<void> {
   const prompt = interaction.options.getString("prompt", true);
   const target = (interaction.options.getString("target") ?? "local") as RunnerTarget;
@@ -145,7 +160,7 @@ async function handleCodexRun(
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
 
   void jobs.startDummyRun(job.id, async (updatedJob) => {
-    await interaction.editReply({ embeds: [buildJobEmbed(updatedJob)] });
+    await updateJobMessage(updatedJob);
   });
 }
 
