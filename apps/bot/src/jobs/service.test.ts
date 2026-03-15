@@ -25,10 +25,12 @@ describe("createJobService", () => {
     const job = await service.createJob({
       prompt: "dummy prompt",
       target: "local",
+      discordChannelId: "channel-1",
     });
-    const logInfo = await service.getLogInfo(job.jobId);
+    const logInfo = await service.getLogInfo(job.id);
 
-    expect(job.logPath).toContain(path.join("logs", "jobs"));
+    expect(job.discord_channel_id).toBe("channel-1");
+    expect(job.log_path).toContain(path.join("logs", "jobs"));
     expect(logInfo.preview).toContain("job created");
   });
 });

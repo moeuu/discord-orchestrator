@@ -55,7 +55,7 @@ export function createCodexExecutor(
                 summary = event.message;
               }
             } catch {
-              logger.debug(`Ignoring non-JSONL output for job ${job.jobId}`);
+              logger.debug(`Ignoring non-JSONL output for job ${job.id}`);
             }
           }
         });
@@ -68,7 +68,7 @@ export function createCodexExecutor(
           resolveOnce({
             status: "failed",
             summary: error.message,
-            finishedAt: new Date().toISOString(),
+            finished_at: new Date().toISOString(),
           });
         });
 
@@ -84,7 +84,7 @@ export function createCodexExecutor(
               }
             } catch {
               logger.debug(
-                `Ignoring trailing non-JSONL output for job ${job.jobId}`,
+                `Ignoring trailing non-JSONL output for job ${job.id}`,
               );
             }
           }
@@ -93,7 +93,7 @@ export function createCodexExecutor(
             resolveOnce({
               status: "succeeded",
               summary,
-              finishedAt: new Date().toISOString(),
+              finished_at: new Date().toISOString(),
             });
             return;
           }
@@ -101,7 +101,7 @@ export function createCodexExecutor(
           resolveOnce({
             status: "failed",
             summary: stderr.trim() || "codex exec failed",
-            finishedAt: new Date().toISOString(),
+            finished_at: new Date().toISOString(),
           });
         });
       });

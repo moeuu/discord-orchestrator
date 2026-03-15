@@ -18,23 +18,28 @@ export function buildJobStatusReply(
 
 export function buildJobEmbed(job: JobRecord): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle(`Codex Job ${job.jobId}`)
+    .setTitle(`Codex Job ${job.id}`)
     .setColor(statusColor[job.status])
     .addFields(
       { name: "status", value: job.status, inline: true },
       { name: "target", value: job.target, inline: true },
-      { name: "started_at", value: job.startedAt ?? "-", inline: true },
-      { name: "finished_at", value: job.finishedAt ?? "-", inline: true },
+      { name: "started_at", value: job.started_at ?? "-", inline: true },
+      { name: "finished_at", value: job.finished_at ?? "-", inline: true },
       {
-        name: "discord_message_id",
-        value: job.discordMessageId ?? "-",
+        name: "discord_channel_id",
+        value: job.discord_channel_id,
         inline: false,
       },
-      { name: "log_path", value: job.logPath ?? "-", inline: false },
+      {
+        name: "discord_message_id",
+        value: job.discord_message_id ?? "-",
+        inline: false,
+      },
+      { name: "log_path", value: job.log_path ?? "-", inline: false },
       { name: "summary", value: truncate(job.summary ?? "-"), inline: false },
       { name: "prompt", value: truncate(job.prompt), inline: false },
     )
-    .setTimestamp(new Date(job.updatedAt));
+    .setTimestamp(new Date(job.updated_at));
 }
 
 const statusColor: Record<JobStatus, number> = {

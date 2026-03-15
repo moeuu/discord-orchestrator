@@ -2,18 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { CreateJobInput, JobRecord } from "./types.js";
+import type { CreateJobInput, JobRecord, UpdateJobInput } from "./types.js";
 
 export type JobStore = {
   create(input: CreateJobInput): Promise<JobRecord>;
-  update(jobId: string, patch: Partial<JobRecord>): Promise<JobRecord>;
-  getByJobId(jobId: string): Promise<JobRecord | null>;
-  getLatest(): Promise<JobRecord | null>;
+  update(id: string, patch: UpdateJobInput): Promise<JobRecord>;
+  get(id: string): Promise<JobRecord | null>;
   list(limit?: number): Promise<JobRecord[]>;
 };
 
-export function createJobStore(jobDataDir: string): JobStore {
+export function createJsonJobStore(jobDataDir: string): JobStore {
   const jobsFile = path.join(jobDataDir, "jobs.json");
+  let operationChain = Promise.resolve();
 
   async function ensureStore(): Promise<void> {
     await fs.mkdir(jobDataDir, { recursive: true });
@@ -28,56 +28,84 @@ export function createJobStore(jobDataDir: string): JobStore {
   async function readJobs(): Promise<JobRecord[]> {
     await ensureStore();
     const raw = await fs.readFile(jobsFile, "utf8");
-    return JSON.parse(raw) as JobRecord[];
+
+    if (!raw.trim()) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      throw new Error(`Invalid job store format: ${jobsFile}`);
+    }
+
+    return parsed as JobRecord[];
   }
 
   async function writeJobs(jobs: JobRecord[]): Promise<void> {
     await ensureStore();
-    await fs.writeFile(jobsFile, `${JSON.stringify(jobs, null, 2)}\n`, "utf8");
+    const nextContents = `${JSON.stringify(jobs, null, 2)}\n`;
+    const tempFile = `${jobsFile}.tmp`;
+    await fs.writeFile(tempFile, nextContents, "utf8");
+    await fs.rename(tempFile, jobsFile);
+  }
+
+  async function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const next = operationChain.then(operation, operation);
+    operationChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await next;
   }
 
   return {
     async create(input) {
-      const jobs = await readJobs();
-      const now = new Date().toISOString();
-      const job: JobRecord = {
-        jobId: randomUUID(),
-        createdAt: now,
-        updatedAt: now,
-        ...input,
-      };
+      return await runExclusive(async () => {
+        const jobs = await readJobs();
+        const now = new Date().toISOString();
+        const job: JobRecord = {
+          id: randomUUID(),
+          created_at: now,
+          updated_at: now,
+          ...input,
+        };
 
-      jobs.unshift(job);
-      await writeJobs(jobs);
-      return job;
+        jobs.unshift(job);
+        await writeJobs(jobs);
+        return job;
+      });
     },
-    async update(jobId, patch) {
-      const jobs = await readJobs();
-      const index = jobs.findIndex((job) => job.jobId === jobId);
+    async update(id, patch) {
+      return await runExclusive(async () => {
+        const jobs = await readJobs();
+        const index = jobs.findIndex((job) => job.id === id);
 
-      if (index === -1) {
-        throw new Error(`Job not found: ${jobId}`);
-      }
+        if (index === -1) {
+          throw new Error(`Job not found: ${id}`);
+        }
 
-      jobs[index] = {
-        ...jobs[index],
-        ...patch,
-        updatedAt: new Date().toISOString(),
-      };
-      await writeJobs(jobs);
-      return jobs[index];
+        jobs[index] = {
+          ...jobs[index],
+          ...patch,
+          updated_at: new Date().toISOString(),
+        };
+        await writeJobs(jobs);
+        return jobs[index];
+      });
     },
-    async getByJobId(jobId) {
-      const jobs = await readJobs();
-      return jobs.find((job) => job.jobId === jobId) ?? null;
+    async get(id) {
+      return await runExclusive(async () => {
+        const jobs = await readJobs();
+        return jobs.find((job) => job.id === id) ?? null;
+      });
     },
-    async getLatest() {
-      const jobs = await readJobs();
-      return jobs[0] ?? null;
-    },
-    async list(limit = 10) {
-      const jobs = await readJobs();
-      return jobs.slice(0, limit);
+    async list(limit) {
+      return await runExclusive(async () => {
+        const jobs = await readJobs();
+        return typeof limit === "number" ? jobs.slice(0, limit) : jobs;
+      });
     },
   };
 }
+
+export const createJobStore = createJsonJobStore;

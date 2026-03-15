@@ -13,7 +13,11 @@ type JobLogInfo = {
 };
 
 type JobService = {
-  createJob(input: { prompt: string; target: RunnerTarget }): Promise<JobRecord>;
+  createJob(input: {
+    prompt: string;
+    target: RunnerTarget;
+    discordChannelId: string;
+  }): Promise<JobRecord>;
   startDummyRun(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
   cancelJob(jobId: string): Promise<JobRecord | null>;
   getJob(jobId?: string | null): Promise<JobRecord | null>;
@@ -38,11 +42,12 @@ export function createJobService(
   const activeJobs = new Map<string, ActiveJob>();
 
   return {
-    async createJob({ prompt, target }) {
+    async createJob({ prompt, target, discordChannelId }) {
       let job = await store.create({
         prompt,
         target,
         status: "queued",
+        discord_channel_id: discordChannelId,
         summary: "Queued dummy run",
       });
 
@@ -55,7 +60,7 @@ export function createJobService(
       activeJobs.set(jobId, controller);
 
       try {
-        let job = await store.getByJobId(jobId);
+        let job = await store.get(jobId);
         if (!job) {
           throw new Error(`Job not found: ${jobId}`);
         }
@@ -63,7 +68,7 @@ export function createJobService(
         job = await ensureLogPath(store, logDir, job);
         job = await store.update(jobId, {
           status: "running",
-          startedAt: new Date().toISOString(),
+          started_at: new Date().toISOString(),
           summary: "Starting dummy run",
         });
 
@@ -76,7 +81,7 @@ export function createJobService(
           if (controller.cancelRequested) {
             const cancelled = await store.update(jobId, {
               status: "cancelled",
-              finishedAt: new Date().toISOString(),
+              finished_at: new Date().toISOString(),
               summary: "Cancelled by user",
             });
             await appendJobLog(cancelled, "job cancelled");
@@ -91,7 +96,7 @@ export function createJobService(
 
         const finished = await store.update(jobId, {
           status: "succeeded",
-          finishedAt: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
           summary: "Dummy run completed",
         });
         await appendJobLog(finished, "dummy run completed");
@@ -99,19 +104,22 @@ export function createJobService(
       } catch (error) {
         logger.error("Dummy run failed", error);
 
-        const failed = await store.update(jobId, {
-          status: "failed",
-          finishedAt: new Date().toISOString(),
-          summary: error instanceof Error ? error.message : "dummy run failed",
-        });
-        await appendJobLog(failed, "dummy run failed");
-        await onUpdate(failed);
+        const failedJob = await store.get(jobId);
+        if (failedJob) {
+          const failed = await store.update(jobId, {
+            status: "failed",
+            finished_at: new Date().toISOString(),
+            summary: error instanceof Error ? error.message : "dummy run failed",
+          });
+          await appendJobLog(failed, "dummy run failed");
+          await onUpdate(failed);
+        }
       } finally {
         activeJobs.delete(jobId);
       }
     },
     async cancelJob(jobId) {
-      const job = await store.getByJobId(jobId);
+      const job = await store.get(jobId);
       if (!job) {
         return null;
       }
@@ -127,7 +135,7 @@ export function createJobService(
       if (job.status === "queued" || job.status === "running") {
         const cancelled = await store.update(jobId, {
           status: "cancelled",
-          finishedAt: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
           summary: "Cancelled before execution completed",
         });
         await appendJobLog(cancelled, "job cancelled");
@@ -138,19 +146,20 @@ export function createJobService(
     },
     async getJob(jobId) {
       if (jobId) {
-        return await store.getByJobId(jobId);
+        return await store.get(jobId);
       }
 
-      return await store.getLatest();
+      const [latest] = await store.list(1);
+      return latest ?? null;
     },
     async getLogInfo(jobId) {
-      const job = await store.getByJobId(jobId);
-      if (!job || !job.logPath) {
+      const job = await store.get(jobId);
+      if (!job || !job.log_path) {
         return { job, preview: null };
       }
 
       try {
-        const contents = await fs.readFile(job.logPath, "utf8");
+        const contents = await fs.readFile(job.log_path, "utf8");
         const preview = contents
           .trim()
           .split("\n")
@@ -176,23 +185,23 @@ async function ensureLogPath(
   logDir: string,
   job: JobRecord,
 ): Promise<JobRecord> {
-  if (job.logPath) {
+  if (job.log_path) {
     return job;
   }
 
-  const logPath = path.join(logDir, "jobs", `${job.jobId}.log`);
+  const logPath = path.join(logDir, "jobs", `${job.id}.log`);
   await fs.mkdir(path.dirname(logPath), { recursive: true });
-  return await store.update(job.jobId, { logPath });
+  return await store.update(job.id, { log_path: logPath });
 }
 
 async function appendJobLog(job: JobRecord, line: string): Promise<void> {
-  if (!job.logPath) {
+  if (!job.log_path) {
     return;
   }
 
-  await fs.mkdir(path.dirname(job.logPath), { recursive: true });
+  await fs.mkdir(path.dirname(job.log_path), { recursive: true });
   await fs.appendFile(
-    job.logPath,
+    job.log_path,
     `${new Date().toISOString()} ${line}\n`,
     "utf8",
   );

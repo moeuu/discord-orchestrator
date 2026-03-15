@@ -94,7 +94,7 @@ async function handleCodexCommand(
 
       return {
         content:
-          `log_path: ${logInfo.job.logPath ?? "-"}` +
+          `log_path: ${logInfo.job.log_path ?? "-"}` +
           lines,
         flags: MessageFlags.Ephemeral,
       };
@@ -130,20 +130,21 @@ async function handleCodexRun(
 ): Promise<void> {
   const prompt = interaction.options.getString("prompt", true);
   const target = (interaction.options.getString("target") ?? "local") as RunnerTarget;
+  const discordChannelId = interaction.channelId ?? "unknown";
 
   await interaction.deferReply();
 
-  let job = await jobs.createJob({ prompt, target });
+  let job = await jobs.createJob({ prompt, target, discordChannelId });
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
 
   const reply = await interaction.fetchReply();
   job =
-    (await store.update(job.jobId, {
-      discordMessageId: reply.id,
+    (await store.update(job.id, {
+      discord_message_id: reply.id,
     })) ?? job;
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
 
-  void jobs.startDummyRun(job.jobId, async (updatedJob) => {
+  void jobs.startDummyRun(job.id, async (updatedJob) => {
     await interaction.editReply({ embeds: [buildJobEmbed(updatedJob)] });
   });
 }
