@@ -1,0 +1,11 @@
+targets:
+  - name: local
+    type: local
+    workspaceRoot: ./data/workspaces
+  - name: remote-dev
+    type: ssh
+    host: example.com
+    user: deploy
+    port: 22
+    workspaceRoot: /srv/discord-codex/workspaces
+
