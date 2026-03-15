@@ -15,12 +15,16 @@ const noopLogger = {
 };
 
 describe("createJobService", () => {
-  it("creates a job with a persisted log path", async () => {
+  it("creates a job with a persisted jsonl log path", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
     const dataDir = path.join(tempRoot, "data");
     const logDir = path.join(tempRoot, "logs");
     const store = createJobStore(dataDir);
-    const service = createJobService(store, logDir, noopLogger);
+    const service = createJobService(store, logDir, noopLogger, {
+      codexBin: "codex",
+      workspaceRoot: path.join(tempRoot, "workspaces"),
+      sourceRepo: tempRoot,
+    });
 
     const job = await service.createJob({
       prompt: "dummy prompt",
@@ -30,7 +34,7 @@ describe("createJobService", () => {
     const logInfo = await service.getLogInfo(job.id);
 
     expect(job.discord_channel_id).toBe("channel-1");
-    expect(job.log_path).toContain(path.join("logs", "jobs"));
-    expect(logInfo.preview).toContain("job created");
+    expect(job.log_path).toContain(path.join("logs", `job-${job.id}.jsonl`));
+    expect(logInfo.preview).toBeNull();
   });
 });

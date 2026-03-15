@@ -37,7 +37,11 @@ npm run dev
 DISCORD_TOKEN=...
 DISCORD_APP_ID=...
 DISCORD_GUILD_ID=...
+WORKSPACE_ROOT=../../data/workspaces
+WORKSPACE_SOURCE_REPO=/absolute/path/to/source/repo
 ```
+
+`WORKSPACE_SOURCE_REPO` を省略した場合は、bot 起動時の Git リポジトリルートを clone 元として使います。`CODEX_FULL_AUTO=false` と `CODEX_SANDBOX=` がデフォルトで、必要なときだけ `--full-auto` または `--sandbox` を環境変数経由で有効化できます。
 
 ## 動作確認
 
@@ -51,6 +55,7 @@ bot 起動後、開発用 Guild で以下を確認します。
 
 - `/ping` が `pong` を返す
 - `/codex status` がジョブ未作成時メッセージまたは最新ジョブを返す
+- `/codex run` が `data/workspaces/job-<id>/` に clone した作業ツリー上で `codex exec --json` を実行する
 
 ## Discord セットアップ概要
 
@@ -71,7 +76,7 @@ bot 起動後、開発用 Guild で以下を確認します。
 
 - `/ping`
 - `/codex status`
-- `/codex run` はダミー実装から開始
+- `/codex run` は local runner で `codex exec --json` を実行
 - 進捗は同一メッセージを編集して更新
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/TASKS.md](docs/TASKS.md) を参照してください。

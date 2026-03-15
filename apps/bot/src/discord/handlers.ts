@@ -24,7 +24,13 @@ export function attachInteractionHandlers(
   logger: Logger,
 ): void {
   const store = createJobStore(config.jobDataDir);
-  const jobs = createJobService(store, config.logDir, logger);
+  const jobs = createJobService(store, config.logDir, logger, {
+    codexBin: config.codexBin,
+    workspaceRoot: config.workspaceRoot,
+    sourceRepo: config.workspaceSourceRepo,
+    fullAuto: config.codexFullAuto,
+    sandbox: config.codexSandbox,
+  });
   const jobMessages = createJobMessageUpdater(client, logger);
 
   // Only slash command interactions are handled in this bot.
@@ -159,7 +165,7 @@ async function handleCodexRun(
     })) ?? job;
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
 
-  void jobs.startDummyRun(job.id, async (updatedJob) => {
+  void jobs.startJob(job.id, async (updatedJob) => {
     await updateJobMessage(updatedJob);
   });
 }

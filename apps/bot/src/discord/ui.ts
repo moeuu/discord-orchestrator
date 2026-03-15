@@ -39,7 +39,10 @@ export function buildJobEmbed(job: JobRecord): EmbedBuilder {
       { name: "job_id", value: job.id, inline: false },
       { name: "status", value: job.status, inline: true },
       { name: "target", value: job.target, inline: true },
+      { name: "pid", value: job.pid ? String(job.pid) : "-", inline: true },
       { name: "last_updated", value: job.updated_at, inline: false },
+      { name: "summary", value: truncate(job.summary ?? "-"), inline: false },
+      { name: "log_path", value: truncate(job.log_path ?? "-"), inline: false },
     )
     .setTimestamp(new Date(job.updated_at));
 }
@@ -143,3 +146,11 @@ const statusColor: Record<JobStatus, number> = {
   failed: 0xed4245,
   cancelled: 0xfee75c,
 };
+
+function truncate(value: string): string {
+  if (value.length <= 1000) {
+    return value;
+  }
+
+  return `${value.slice(0, 997)}...`;
+}
