@@ -35,6 +35,19 @@ const configSchema = z.object({
   JOB_DATA_DIR: z.string().min(1).default("../../data"),
   LOG_DIR: z.string().min(1).default("../../logs"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  DASHBOARD_PORT: z.coerce.number().int().positive().default(8787),
+  DASHBOARD_BASE_URL: z
+    .preprocess(emptyToUndefined, z.string().url().optional()),
+  AUTOPILOT_BIN: z.string().min(1).default("uv"),
+  AUTOPILOT_WORKDIR: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
+  AUTOPILOT_ARTIFACTS_DIR: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
+  AUTOPILOT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
 });
 
 export type AppConfig = {
@@ -49,6 +62,12 @@ export type AppConfig = {
   jobDataDir: string;
   logDir: string;
   logLevel: "debug" | "info" | "warn" | "error";
+  dashboardPort: number;
+  dashboardBaseUrl: string;
+  autopilotBin: string;
+  autopilotWorkdir?: string;
+  autopilotArtifactsDir?: string;
+  autopilotPollIntervalMs: number;
 };
 
 export function loadConfig(): AppConfig {
@@ -76,6 +95,18 @@ export function loadConfig(): AppConfig {
     jobDataDir: path.resolve(process.cwd(), parsed.JOB_DATA_DIR),
     logDir: path.resolve(process.cwd(), parsed.LOG_DIR),
     logLevel: parsed.LOG_LEVEL,
+    dashboardPort: parsed.DASHBOARD_PORT,
+    dashboardBaseUrl:
+      parsed.DASHBOARD_BASE_URL ??
+      `http://127.0.0.1:${parsed.DASHBOARD_PORT}`,
+    autopilotBin: parsed.AUTOPILOT_BIN,
+    autopilotWorkdir: parsed.AUTOPILOT_WORKDIR
+      ? path.resolve(process.cwd(), parsed.AUTOPILOT_WORKDIR)
+      : undefined,
+    autopilotArtifactsDir: parsed.AUTOPILOT_ARTIFACTS_DIR
+      ? path.resolve(process.cwd(), parsed.AUTOPILOT_ARTIFACTS_DIR)
+      : undefined,
+    autopilotPollIntervalMs: parsed.AUTOPILOT_POLL_INTERVAL_MS,
   };
 }
 

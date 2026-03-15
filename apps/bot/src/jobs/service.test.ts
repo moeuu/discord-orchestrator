@@ -24,6 +24,9 @@ describe("createJobService", () => {
       codexBin: "codex",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: tempRoot,
+    }, {
+      autopilotBin: "uv",
+      workdir: tempRoot,
     });
 
     const job = await service.createJob({
@@ -34,7 +37,8 @@ describe("createJobService", () => {
     const logInfo = await service.getLogInfo(job.id);
 
     expect(job.discord_channel_id).toBe("channel-1");
-    expect(job.log_path).toContain(path.join("logs", `job-${job.id}.jsonl`));
+    expect(job.tool).toBe("codex");
+    expect(job.log_path).toContain(path.join("logs", `codex-${job.id}.jsonl`));
     expect(logInfo.preview).toBeNull();
   });
 });

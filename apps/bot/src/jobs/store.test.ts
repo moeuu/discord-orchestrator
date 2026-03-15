@@ -12,6 +12,7 @@ describe("createJobStore", () => {
     const store = createJobStore(tempDir);
 
     const created = await store.create({
+      tool: "codex",
       prompt: "status check",
       status: "queued",
       target: "local",

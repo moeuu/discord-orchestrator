@@ -6,6 +6,7 @@ import { createJobMessageUpdater } from "./ui.js";
 function createJob(partial: Partial<JobRecord> = {}): JobRecord {
   return {
     id: "job-1",
+    tool: "codex",
     prompt: "test",
     target: "local",
     status: "running",

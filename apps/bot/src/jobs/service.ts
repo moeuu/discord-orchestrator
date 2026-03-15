@@ -3,12 +3,18 @@ import path from "node:path";
 
 import type { Logger } from "../util/logger.js";
 import {
+  createAutopilotExecutor,
+  buildAutopilotSummary,
+  type AutopilotConfig,
+  type AutopilotRunInput,
+} from "./autopilot.js";
+import {
   createCodexExecutor,
   type CodexExecConfig,
   type CodexEvent,
 } from "./codexExec.js";
 import type { JobStore } from "./store.js";
-import type { JobRecord, RunnerTarget } from "./types.js";
+import type { JobProgress, JobRecord, RunnerTarget } from "./types.js";
 
 type JobUpdateHandler = (job: JobRecord) => Promise<void>;
 
@@ -24,8 +30,21 @@ type JobService = {
     discordChannelId: string;
   }): Promise<JobRecord>;
   startJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
+  createAutopilotJob(input: {
+    competition: string;
+    instruction: string;
+    compute?: string;
+    maxIterations?: number;
+    dryRun?: boolean;
+    target: RunnerTarget;
+    runnerId: string;
+    discordChannelId: string;
+    dashboardBaseUrl: string;
+  }): Promise<JobRecord>;
+  startAutopilotJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
   cancelJob(jobId: string): Promise<JobRecord | null>;
   getJob(jobId?: string | null): Promise<JobRecord | null>;
+  listJobs(limit?: number): Promise<JobRecord[]>;
   getLogInfo(jobId: string): Promise<JobLogInfo>;
 };
 
@@ -38,13 +57,16 @@ export function createJobService(
   logDir: string,
   logger: Logger,
   codexConfig: CodexExecConfig,
+  autopilotConfig: AutopilotConfig,
 ): JobService {
   const activeJobs = new Map<string, ActiveJob>();
-  const executor = createCodexExecutor(codexConfig, logger);
+  const codexExecutor = createCodexExecutor(codexConfig, logger);
+  const autopilotExecutor = createAutopilotExecutor(autopilotConfig, logger);
 
   return {
     async createJob({ prompt, target, discordChannelId }) {
       let job = await store.create({
+        tool: "codex",
         prompt,
         target,
         status: "queued",
@@ -56,14 +78,8 @@ export function createJobService(
       return job;
     },
     async startJob(jobId, onUpdate) {
-      const abortController = new AbortController();
-      activeJobs.set(jobId, { abortController });
-
-      try {
-        let job = await store.get(jobId);
-        if (!job) {
-          throw new Error(`Job not found: ${jobId}`);
-        }
+      return await startTrackedJob(activeJobs, jobId, async (abortController) => {
+        let job = await requireJob(store, jobId);
 
         if (job.target !== "local") {
           throw new Error(`Unsupported target for local runner: ${job.target}`);
@@ -77,7 +93,7 @@ export function createJobService(
         });
         await onUpdate(job);
 
-        const result = await executor.run(job, {
+        const result = await codexExecutor.run(job, {
           signal: abortController.signal,
           onPid: async (pid) => {
             const updated = await store.update(jobId, { pid });
@@ -103,22 +119,86 @@ export function createJobService(
           summary: result.summary,
         });
         await onUpdate(finalJob);
-      } catch (error) {
-        logger.error("Job execution failed", error);
+      }, logger, store, onUpdate);
+    },
+    async createAutopilotJob({
+      competition,
+      instruction,
+      compute,
+      maxIterations,
+      dryRun,
+      target,
+      runnerId,
+      discordChannelId,
+      dashboardBaseUrl,
+    }) {
+      let job = await store.create({
+        tool: "autopilot",
+        prompt: instruction,
+        target,
+        status: "queued",
+        runner_id: runnerId,
+        discord_channel_id: discordChannelId,
+        summary: `Queued kaggle-autopilot for ${competition}`,
+        input: {
+          competition,
+          instruction,
+          compute: compute ?? "local_gpu",
+          maxIterations: maxIterations ?? 5,
+          dryRun: dryRun ?? true,
+        },
+        dashboard_url: `${dashboardBaseUrl.replace(/\/$/, "")}/jobs/__JOB_ID__`,
+      });
 
-        const failedJob = await store.get(jobId);
-        if (failedJob) {
-          const failed = await store.update(jobId, {
-            status: "failed",
-            finished_at: new Date().toISOString(),
-            summary:
-              error instanceof Error ? error.message : "codex exec failed",
-          });
-          await onUpdate(failed);
-        }
-      } finally {
-        activeJobs.delete(jobId);
-      }
+      job = await ensureLogPath(store, logDir, job);
+      job = await store.update(job.id, {
+        dashboard_url: `${dashboardBaseUrl.replace(/\/$/, "")}/jobs/${job.id}`,
+      });
+      return job;
+    },
+    async startAutopilotJob(jobId, onUpdate) {
+      return await startTrackedJob(activeJobs, jobId, async (abortController) => {
+        let job = await requireJob(store, jobId);
+        const input = parseAutopilotInput(job.input);
+
+        job = await ensureLogPath(store, logDir, job);
+        job = await store.update(jobId, {
+          status: "running",
+          started_at: new Date().toISOString(),
+          summary: `Launching kaggle-autopilot for ${input.competition}`,
+        });
+        await onUpdate(job);
+
+        const { result, artifactRoot, progress } = await autopilotExecutor.run(
+          job,
+          input,
+          {
+            signal: abortController.signal,
+            onPid: async (pid) => {
+              const updated = await store.update(jobId, { pid });
+              await onUpdate(updated);
+            },
+            onProgress: async (nextProgress, meta) => {
+              const updated = await handleAutopilotProgress(
+                store,
+                jobId,
+                nextProgress,
+                meta.artifactRoot,
+              );
+              await onUpdate(updated);
+            },
+          },
+        );
+
+        const finalJob = await store.update(jobId, {
+          status: result.status,
+          finished_at: result.finished_at,
+          summary: result.summary,
+          artifact_root: artifactRoot,
+          progress: progress ?? job.progress,
+        });
+        await onUpdate(finalJob);
+      }, logger, store, onUpdate);
     },
     async cancelJob(jobId) {
       const job = await store.get(jobId);
@@ -152,6 +232,9 @@ export function createJobService(
       const [latest] = await store.list(1);
       return latest ?? null;
     },
+    async listJobs(limit) {
+      return await store.list(limit);
+    },
     async getLogInfo(jobId) {
       const job = await store.get(jobId);
       if (!job || !job.log_path) {
@@ -163,7 +246,7 @@ export function createJobService(
         const preview = contents
           .trim()
           .split("\n")
-          .slice(-10)
+          .slice(-20)
           .join("\n");
 
         return {
@@ -180,6 +263,45 @@ export function createJobService(
   };
 }
 
+async function startTrackedJob(
+  activeJobs: Map<string, ActiveJob>,
+  jobId: string,
+  execute: (abortController: AbortController) => Promise<void>,
+  logger: Logger,
+  store: JobStore,
+  onUpdate: JobUpdateHandler,
+): Promise<void> {
+  const abortController = new AbortController();
+  activeJobs.set(jobId, { abortController });
+
+  try {
+    await execute(abortController);
+  } catch (error) {
+    logger.error("Job execution failed", error);
+
+    const failedJob = await store.get(jobId);
+    if (failedJob) {
+      const failed = await store.update(jobId, {
+        status: "failed",
+        finished_at: new Date().toISOString(),
+        summary: error instanceof Error ? error.message : "job execution failed",
+      });
+      await onUpdate(failed);
+    }
+  } finally {
+    activeJobs.delete(jobId);
+  }
+}
+
+async function requireJob(store: JobStore, jobId: string): Promise<JobRecord> {
+  const job = await store.get(jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
+  }
+
+  return job;
+}
+
 async function ensureLogPath(
   store: JobStore,
   logDir: string,
@@ -189,7 +311,8 @@ async function ensureLogPath(
     return job;
   }
 
-  const logPath = path.join(logDir, `job-${job.id}.jsonl`);
+  const extension = job.tool === "autopilot" ? "log" : "jsonl";
+  const logPath = path.join(logDir, `${job.tool}-${job.id}.${extension}`);
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   await fs.writeFile(logPath, "", "utf8");
   return await store.update(job.id, { log_path: logPath });
@@ -225,4 +348,38 @@ async function handleCodexEvent(
   }
 
   return await store.update(jobId, patch);
+}
+
+async function handleAutopilotProgress(
+  store: JobStore,
+  jobId: string,
+  progress: JobProgress,
+  artifactRoot: string,
+): Promise<JobRecord> {
+  const summary = buildAutopilotSummary(progress) ?? "autopilot running";
+
+  return await store.update(jobId, {
+    artifact_root: artifactRoot,
+    progress,
+    summary,
+  });
+}
+
+function parseAutopilotInput(
+  input: Record<string, unknown> | undefined,
+): AutopilotRunInput {
+  return {
+    competition:
+      typeof input?.competition === "string"
+        ? input.competition
+        : "unknown-competition",
+    instruction:
+      typeof input?.instruction === "string" ? input.instruction : "",
+    compute:
+      typeof input?.compute === "string" ? input.compute : "local_gpu",
+    maxIterations:
+      typeof input?.maxIterations === "number" ? input.maxIterations : 5,
+    dryRun:
+      typeof input?.dryRun === "boolean" ? input.dryRun : true,
+  };
 }

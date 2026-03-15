@@ -93,6 +93,7 @@ describe("codexExec", () => {
 
     const job: JobRecord = {
       id: "test",
+      tool: "codex",
       prompt: "run something",
       target: "local",
       status: "running",

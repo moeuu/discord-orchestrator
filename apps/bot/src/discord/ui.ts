@@ -32,19 +32,64 @@ export function buildJobStatusReply(
 }
 
 export function buildJobEmbed(job: JobRecord): EmbedBuilder {
-  return new EmbedBuilder()
-    .setTitle(`Codex Job ${job.id}`)
+  const progress = job.progress;
+  const embed = new EmbedBuilder()
+    .setTitle(`${capitalize(job.tool)} Job ${job.id}`)
     .setColor(statusColor[job.status])
     .addFields(
       { name: "job_id", value: job.id, inline: false },
+      { name: "tool", value: job.tool, inline: true },
       { name: "status", value: job.status, inline: true },
-      { name: "target", value: job.target, inline: true },
+      {
+        name: "runner",
+        value: job.runner_id ?? job.target,
+        inline: true,
+      },
       { name: "pid", value: job.pid ? String(job.pid) : "-", inline: true },
       { name: "last_updated", value: job.updated_at, inline: false },
       { name: "summary", value: truncate(job.summary ?? "-"), inline: false },
       { name: "log_path", value: truncate(job.log_path ?? "-"), inline: false },
-    )
-    .setTimestamp(new Date(job.updated_at));
+    );
+
+  if (job.dashboard_url) {
+    embed.addFields({
+      name: "dashboard",
+      value: truncate(job.dashboard_url),
+      inline: false,
+    });
+  }
+
+  if (progress) {
+    embed.addFields(
+      { name: "phase", value: progress.phase ?? "-", inline: true },
+      {
+        name: "iter",
+        value:
+          typeof progress.current_iter === "number"
+            ? `${progress.current_iter}${typeof progress.max_iterations === "number" ? ` / ${progress.max_iterations}` : ""}`
+            : "-",
+        inline: true,
+      },
+      {
+        name: "best_metric",
+        value: progress.best_metric_name && progress.best_metric
+          ? `${progress.best_metric_name}: ${progress.best_metric}`
+          : progress.best_metric ?? "-",
+        inline: true,
+      },
+      {
+        name: "strategy",
+        value: truncate(
+          progress.strategy_summary ??
+            progress.latest_agent_message ??
+            "-",
+        ),
+        inline: false,
+      },
+    );
+  }
+
+  return embed.setTimestamp(new Date(job.updated_at));
 }
 
 export function createJobMessageUpdater(
@@ -153,4 +198,8 @@ function truncate(value: string): string {
   }
 
   return `${value.slice(0, 997)}...`;
+}
+
+function capitalize(value: string): string {
+  return value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
