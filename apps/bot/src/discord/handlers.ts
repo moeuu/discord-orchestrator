@@ -9,7 +9,7 @@ import type { AppConfig } from "../config.js";
 import { createJobStore } from "../jobs/store.js";
 import { createCodexExecutor } from "../jobs/codexExec.js";
 import type { Logger } from "../util/logger.js";
-import { formatJobList, formatJobStarted } from "./ui.js";
+import { buildJobStatusReply } from "./ui.js";
 
 export function attachInteractionHandlers(
   client: Client,
@@ -48,42 +48,50 @@ async function handleSlashCommand(
   switch (interaction.commandName) {
     case "ping":
       return { content: "pong" };
-    case "job-run": {
-      const prompt = interaction.options.getString("prompt", true);
-      const job = await store.create({
-        prompt,
-        status: "queued",
-        target: "local",
-      });
-
-      void store
-        .update(job.id, { status: "running" })
-        .then(() => codex.run({ ...job, status: "running" }))
-        .then(async (result) => {
-          await store.update(job.id, {
-            status: result.status,
-            summary: result.summary,
-            finishedAt: result.finishedAt,
-          });
-        })
-        .catch(async (error) => {
-          await store.update(job.id, {
-            status: "failed",
-            summary: error instanceof Error ? error.message : "job failed",
-            finishedAt: new Date().toISOString(),
-          });
-        });
-
-      return formatJobStarted(job);
-    }
-    case "job-list": {
-      const jobs = await store.list();
-      return formatJobList(jobs);
-    }
+    case "codex":
+      return await handleCodexCommand(interaction, store, codex);
     default:
       return {
         content: "未対応のコマンドです。",
         flags: MessageFlags.Ephemeral,
       };
+  }
+}
+
+async function handleCodexCommand(
+  interaction: ChatInputCommandInteraction,
+  store: ReturnType<typeof createJobStore>,
+  codex: ReturnType<typeof createCodexExecutor>,
+): Promise<InteractionReplyOptions> {
+  const subcommand = interaction.options.getSubcommand();
+
+  switch (subcommand) {
+    case "status": {
+      const jobId = interaction.options.getString("job_id");
+      const job = jobId ? await store.getByJobId(jobId) : await store.getLatest();
+      return buildJobStatusReply(job);
+    }
+    case "run":
+      return {
+        content: "run は次のステップでダミー実装を追加します。",
+        flags: MessageFlags.Ephemeral,
+      };
+    case "logs":
+      return {
+        content: "logs はまだ未実装です。",
+        flags: MessageFlags.Ephemeral,
+      };
+    case "cancel":
+      return {
+        content: "cancel はまだ未実装です。",
+        flags: MessageFlags.Ephemeral,
+      };
+    default: {
+      void codex;
+      return {
+        content: "未対応の subcommand です。",
+        flags: MessageFlags.Ephemeral,
+      };
+    }
   }
 }

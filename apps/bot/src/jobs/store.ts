@@ -4,10 +4,12 @@ import { randomUUID } from "node:crypto";
 
 import type { CreateJobInput, JobRecord } from "./types.js";
 
-type JobStore = {
+export type JobStore = {
   create(input: CreateJobInput): Promise<JobRecord>;
-  update(id: string, patch: Partial<JobRecord>): Promise<JobRecord>;
-  list(): Promise<JobRecord[]>;
+  update(jobId: string, patch: Partial<JobRecord>): Promise<JobRecord>;
+  getByJobId(jobId: string): Promise<JobRecord | null>;
+  getLatest(): Promise<JobRecord | null>;
+  list(limit?: number): Promise<JobRecord[]>;
 };
 
 export function createJobStore(jobDataDir: string): JobStore {
@@ -37,9 +39,11 @@ export function createJobStore(jobDataDir: string): JobStore {
   return {
     async create(input) {
       const jobs = await readJobs();
+      const now = new Date().toISOString();
       const job: JobRecord = {
-        id: randomUUID(),
-        createdAt: new Date().toISOString(),
+        jobId: randomUUID(),
+        createdAt: now,
+        updatedAt: now,
         ...input,
       };
 
@@ -47,21 +51,33 @@ export function createJobStore(jobDataDir: string): JobStore {
       await writeJobs(jobs);
       return job;
     },
-    async update(id, patch) {
+    async update(jobId, patch) {
       const jobs = await readJobs();
-      const index = jobs.findIndex((job) => job.id === id);
+      const index = jobs.findIndex((job) => job.jobId === jobId);
 
       if (index === -1) {
-        throw new Error(`Job not found: ${id}`);
+        throw new Error(`Job not found: ${jobId}`);
       }
 
-      jobs[index] = { ...jobs[index], ...patch };
+      jobs[index] = {
+        ...jobs[index],
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      };
       await writeJobs(jobs);
       return jobs[index];
     },
-    async list() {
+    async getByJobId(jobId) {
       const jobs = await readJobs();
-      return jobs.slice(0, 10);
+      return jobs.find((job) => job.jobId === jobId) ?? null;
+    },
+    async getLatest() {
+      const jobs = await readJobs();
+      return jobs[0] ?? null;
+    },
+    async list(limit = 10) {
+      const jobs = await readJobs();
+      return jobs.slice(0, limit);
     },
   };
 }

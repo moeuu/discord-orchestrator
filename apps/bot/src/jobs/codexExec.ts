@@ -55,7 +55,7 @@ export function createCodexExecutor(
                 summary = event.message;
               }
             } catch {
-              logger.debug(`Ignoring non-JSONL output for job ${job.id}`);
+              logger.debug(`Ignoring non-JSONL output for job ${job.jobId}`);
             }
           }
         });
@@ -83,7 +83,9 @@ export function createCodexExecutor(
                 summary = event.message;
               }
             } catch {
-              logger.debug(`Ignoring trailing non-JSONL output for job ${job.id}`);
+              logger.debug(
+                `Ignoring trailing non-JSONL output for job ${job.jobId}`,
+              );
             }
           }
 

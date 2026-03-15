@@ -10,11 +10,11 @@
 
 ## Stage 2
 
-- [ ] `/ping` を実装
-- [ ] `/codex status` を実装
-- [ ] `JobStore` 抽象と JSON 実装を用意
-- [ ] Job status 用 Embed を作る
-- [ ] lint/test/dev スクリプトを整える
+- [x] `/ping` を実装
+- [x] `/codex status` を実装
+- [x] `JobStore` 抽象と JSON 実装を用意
+- [x] Job status 用 Embed を作る
+- [x] lint/test/dev スクリプトを整える
 
 ## Stage 3
 
