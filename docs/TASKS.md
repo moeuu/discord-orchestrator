@@ -18,14 +18,14 @@
 
 ## Stage 3
 
-- [ ] `/codex run` ダミー実装
-- [ ] ジョブ作成時に `discord_message_id` を保存
-- [ ] 同一メッセージ更新で進捗を見せる
-- [ ] ログファイルパスを保存する
+- [x] `/codex run` ダミー実装
+- [x] ジョブ作成時に `discord_message_id` を保存
+- [x] 同一メッセージ更新で進捗を見せる
+- [x] ログファイルパスを保存する
 
 ## Stage 4
 
-- [ ] `/codex logs` を実装
-- [ ] `/codex cancel` を実装
+- [x] `/codex logs` を実装
+- [x] `/codex cancel` を実装
 - [ ] `codex exec --jsonl` 実行へ置き換える
 - [ ] `ssh` runner を実装

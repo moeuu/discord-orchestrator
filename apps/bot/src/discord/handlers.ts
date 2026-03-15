@@ -6,10 +6,11 @@ import type {
 import { Events, MessageFlags } from "discord.js";
 
 import type { AppConfig } from "../config.js";
-import { createJobStore } from "../jobs/store.js";
-import { createCodexExecutor } from "../jobs/codexExec.js";
+import { createJobStore, type JobStore } from "../jobs/store.js";
+import { createJobService } from "../jobs/service.js";
 import type { Logger } from "../util/logger.js";
-import { buildJobStatusReply } from "./ui.js";
+import type { RunnerTarget } from "../jobs/types.js";
+import { buildJobEmbed, buildJobStatusReply } from "./ui.js";
 
 export function attachInteractionHandlers(
   client: Client,
@@ -17,7 +18,7 @@ export function attachInteractionHandlers(
   logger: Logger,
 ): void {
   const store = createJobStore(config.jobDataDir);
-  const codex = createCodexExecutor(config.codexBin, logger);
+  const jobs = createJobService(store, config.logDir, logger);
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) {
@@ -25,8 +26,10 @@ export function attachInteractionHandlers(
     }
 
     try {
-      const response = await handleSlashCommand(interaction, store, codex);
-      await interaction.reply(response);
+      const response = await handleSlashCommand(interaction, store, jobs);
+      if (response) {
+        await interaction.reply(response);
+      }
     } catch (error) {
       logger.error("Command failed", error);
 
@@ -42,14 +45,14 @@ export function attachInteractionHandlers(
 
 async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
-  store: ReturnType<typeof createJobStore>,
-  codex: ReturnType<typeof createCodexExecutor>,
-): Promise<InteractionReplyOptions> {
+  store: JobStore,
+  jobs: ReturnType<typeof createJobService>,
+): Promise<InteractionReplyOptions | null> {
   switch (interaction.commandName) {
     case "ping":
       return { content: "pong" };
     case "codex":
-      return await handleCodexCommand(interaction, store, codex);
+      return await handleCodexCommand(interaction, store, jobs);
     default:
       return {
         content: "未対応のコマンドです。",
@@ -60,38 +63,94 @@ async function handleSlashCommand(
 
 async function handleCodexCommand(
   interaction: ChatInputCommandInteraction,
-  store: ReturnType<typeof createJobStore>,
-  codex: ReturnType<typeof createCodexExecutor>,
-): Promise<InteractionReplyOptions> {
+  store: JobStore,
+  jobs: ReturnType<typeof createJobService>,
+): Promise<InteractionReplyOptions | null> {
   const subcommand = interaction.options.getSubcommand();
 
   switch (subcommand) {
     case "status": {
       const jobId = interaction.options.getString("job_id");
-      const job = jobId ? await store.getByJobId(jobId) : await store.getLatest();
+      const job = await jobs.getJob(jobId);
       return buildJobStatusReply(job);
     }
     case "run":
+      await handleCodexRun(interaction, store, jobs);
+      return null;
+    case "logs": {
+      const jobId = interaction.options.getString("job_id", true);
+      const logInfo = await jobs.getLogInfo(jobId);
+      if (!logInfo.job) {
+        return {
+          content: `job_id=${jobId} は見つかりません。`,
+          flags: MessageFlags.Ephemeral,
+        };
+      }
+
+      const lines = logInfo.preview
+        ? `\n\n\`\`\`\n${truncateLog(logInfo.preview)}\n\`\`\``
+        : "";
+
       return {
-        content: "run は次のステップでダミー実装を追加します。",
+        content:
+          `log_path: ${logInfo.job.logPath ?? "-"}` +
+          lines,
         flags: MessageFlags.Ephemeral,
       };
-    case "logs":
+    }
+    case "cancel": {
+      const jobId = interaction.options.getString("job_id", true);
+      const job = await jobs.cancelJob(jobId);
+      if (!job) {
+        return {
+          content: `job_id=${jobId} は見つかりません。`,
+          flags: MessageFlags.Ephemeral,
+        };
+      }
+
       return {
-        content: "logs はまだ未実装です。",
+        embeds: [buildJobEmbed(job)],
         flags: MessageFlags.Ephemeral,
       };
-    case "cancel":
-      return {
-        content: "cancel はまだ未実装です。",
-        flags: MessageFlags.Ephemeral,
-      };
+    }
     default: {
-      void codex;
       return {
         content: "未対応の subcommand です。",
         flags: MessageFlags.Ephemeral,
       };
     }
   }
+}
+
+async function handleCodexRun(
+  interaction: ChatInputCommandInteraction,
+  store: JobStore,
+  jobs: ReturnType<typeof createJobService>,
+): Promise<void> {
+  const prompt = interaction.options.getString("prompt", true);
+  const target = (interaction.options.getString("target") ?? "local") as RunnerTarget;
+
+  await interaction.deferReply();
+
+  let job = await jobs.createJob({ prompt, target });
+  await interaction.editReply({ embeds: [buildJobEmbed(job)] });
+
+  const reply = await interaction.fetchReply();
+  job =
+    (await store.update(job.jobId, {
+      discordMessageId: reply.id,
+    })) ?? job;
+  await interaction.editReply({ embeds: [buildJobEmbed(job)] });
+
+  void jobs.startDummyRun(job.jobId, async (updatedJob) => {
+    await interaction.editReply({ embeds: [buildJobEmbed(updatedJob)] });
+  });
+}
+
+function truncateLog(value: string): string {
+  if (value.length <= 1800) {
+    return value;
+  }
+
+  return `${value.slice(-1800)}`;
 }
