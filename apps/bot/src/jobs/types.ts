@@ -41,9 +41,12 @@ export type Job = {
   discord_channel_id: string;
   discord_message_id?: string;
   discord_thread_id?: string;
+  external_id?: string;
   pid?: number;
   log_path?: string;
   log_stream_offset?: number;
+  remote_log_path?: string;
+  remote_log_offset?: number;
   started_at?: string;
   finished_at?: string;
   summary?: string;
@@ -65,9 +68,12 @@ export type CreateJobInput = Pick<
   | "discord_channel_id"
   | "discord_message_id"
   | "discord_thread_id"
+  | "external_id"
   | "pid"
   | "log_path"
   | "log_stream_offset"
+  | "remote_log_path"
+  | "remote_log_offset"
   | "runner_id"
   | "dashboard_url"
   | "artifact_root"

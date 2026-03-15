@@ -41,11 +41,17 @@ WORKSPACE_ROOT=../../data/workspaces
 WORKSPACE_SOURCE_REPO=/absolute/path/to/source/repo
 AUTOPILOT_WORKDIR=/absolute/path/to/kaggle-autopilot
 AUTOPILOT_ARTIFACTS_DIR=/absolute/path/to/kaggle-autopilot/artifacts
+AUTOPILOT_REMOTE_WATCH_ENABLED=true
+AUTOPILOT_REMOTE_WATCH_HOST=lab_rdp
+AUTOPILOT_REMOTE_WATCH_RUNNER_ID=lab_rdp
+AUTOPILOT_REMOTE_WATCH_CHANNEL_ID=<discord channel id>
 ```
 
 `WORKSPACE_SOURCE_REPO` を省略した場合は、bot 起動時の Git リポジトリルートを clone 元として使います。`CODEX_FULL_AUTO=false` と `CODEX_SANDBOX=` がデフォルトで、必要なときだけ `--full-auto` または `--sandbox` を環境変数経由で有効化できます。
 
 Autopilot の進捗ダッシュボードは `DASHBOARD_PORT` と `DASHBOARD_BASE_URL` で設定します。デフォルトでは `http://127.0.0.1:8787` に立ち上がり、`/jobs/<job-id>` で iter ごとの戦略、metrics、ログ末尾を確認できます。
+
+研究室 Ubuntu で手動に `uv run kagglebot autopilot ...` を打った run も Discord に流したい場合は、bot 側で `AUTOPILOT_REMOTE_WATCH_*` を設定し、研究室マシンの shell で `source /path/to/discord-orchestrator/scripts/autopilot-shell-hook.sh` を読み込んでください。以後は同じ `uv run kagglebot autopilot ...` を打つだけで `~/.discord-orchestrator/autopilot-sessions/` に session manifest と console log が残り、bot が `ssh lab_rdp` 経由で自動検出して Discord embed とログ thread を作成します。
 
 ## 動作確認
 
@@ -61,6 +67,7 @@ bot 起動後、開発用 Guild で以下を確認します。
 - `/codex status` がジョブ未作成時メッセージまたは最新ジョブを返す
 - `/codex run` が `data/workspaces/job-<id>/` に clone した作業ツリー上で `codex exec --json` を実行する
 - `/autopilot run` が `AUTOPILOT_WORKDIR` で `uv run kagglebot autopilot ...` を実行し、Discord embed とダッシュボードを自動更新する
+- 研究室 Ubuntu の manual run は shell hook + `AUTOPILOT_REMOTE_WATCH_ENABLED=true` で自動検出し、Discord に同じ UI で流す
 
 ## Discord セットアップ概要
 

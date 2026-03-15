@@ -59,6 +59,14 @@ export function buildJobEmbed(job: JobRecord): EmbedBuilder {
     });
   }
 
+  if (job.external_id) {
+    embed.addFields({
+      name: "external_session",
+      value: job.external_id,
+      inline: false,
+    });
+  }
+
   if (progress) {
     embed.addFields(
       { name: "phase", value: progress.phase ?? "-", inline: true },

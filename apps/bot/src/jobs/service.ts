@@ -14,7 +14,12 @@ import {
   type CodexEvent,
 } from "./codexExec.js";
 import type { JobStore } from "./store.js";
-import type { JobProgress, JobRecord, RunnerTarget } from "./types.js";
+import type {
+  JobProgress,
+  JobRecord,
+  JobStatus,
+  RunnerTarget,
+} from "./types.js";
 
 type JobUpdateHandler = (job: JobRecord) => Promise<void>;
 
@@ -42,6 +47,22 @@ type JobService = {
     dashboardBaseUrl: string;
   }): Promise<JobRecord>;
   startAutopilotJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
+  observeRemoteAutopilotSession(input: {
+    sessionId: string;
+    competition: string;
+    instruction: string;
+    command: string;
+    runnerId: string;
+    discordChannelId: string;
+    dashboardBaseUrl: string;
+    remoteLogPath: string;
+    artifactRoot?: string;
+    status: JobStatus;
+    startedAt?: string;
+    finishedAt?: string;
+    summary?: string;
+    progress?: JobProgress;
+  }): Promise<{ job: JobRecord; created: boolean }>;
   cancelJob(jobId: string): Promise<JobRecord | null>;
   getJob(jobId?: string | null): Promise<JobRecord | null>;
   listJobs(limit?: number): Promise<JobRecord[]>;
@@ -199,6 +220,83 @@ export function createJobService(
         });
         await onUpdate(finalJob);
       }, logger, store, onUpdate);
+    },
+    async observeRemoteAutopilotSession({
+      sessionId,
+      competition,
+      instruction,
+      command,
+      runnerId,
+      discordChannelId,
+      dashboardBaseUrl,
+      remoteLogPath,
+      artifactRoot,
+      status,
+      startedAt,
+      finishedAt,
+      summary,
+      progress,
+    }) {
+      const existing = await findJobByExternalId(store, sessionId);
+      const nextSummary =
+        summary ??
+        buildAutopilotSummary(progress ?? null) ??
+        `Observed autopilot for ${competition}`;
+
+      if (existing) {
+        let job = await store.update(existing.id, {
+          prompt: instruction || existing.prompt,
+          status,
+          runner_id: runnerId,
+          summary: nextSummary,
+          started_at: startedAt ?? existing.started_at,
+          finished_at: finishedAt ?? existing.finished_at,
+          remote_log_path: remoteLogPath,
+          artifact_root: artifactRoot ?? existing.artifact_root,
+          progress: progress ?? existing.progress,
+          input: {
+            ...existing.input,
+            competition,
+            instruction,
+            command,
+            manualSessionId: sessionId,
+            observed: true,
+          },
+        });
+        job = await ensureLogPath(store, logDir, job);
+        return { job, created: false };
+      }
+
+      let job = await store.create({
+        tool: "autopilot",
+        prompt: instruction || command,
+        target: "ssh",
+        status,
+        runner_id: runnerId,
+        discord_channel_id: discordChannelId,
+        external_id: sessionId,
+        remote_log_path: remoteLogPath,
+        remote_log_offset: 0,
+        summary: nextSummary,
+        started_at: startedAt,
+        finished_at: finishedAt,
+        artifact_root: artifactRoot,
+        progress,
+        input: {
+          competition,
+          instruction,
+          command,
+          manualSessionId: sessionId,
+          observed: true,
+        },
+        dashboard_url: `${dashboardBaseUrl.replace(/\/$/, "")}/jobs/__JOB_ID__`,
+      });
+
+      job = await ensureLogPath(store, logDir, job);
+      job = await store.update(job.id, {
+        dashboard_url: `${dashboardBaseUrl.replace(/\/$/, "")}/jobs/${job.id}`,
+      });
+      return { job, created: true };
     },
     async cancelJob(jobId) {
       const job = await store.get(jobId);
@@ -382,4 +480,12 @@ function parseAutopilotInput(
     dryRun:
       typeof input?.dryRun === "boolean" ? input.dryRun : true,
   };
+}
+
+async function findJobByExternalId(
+  store: JobStore,
+  externalId: string,
+): Promise<JobRecord | null> {
+  const jobs = await store.list();
+  return jobs.find((job) => job.external_id === externalId) ?? null;
 }

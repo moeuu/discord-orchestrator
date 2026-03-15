@@ -48,6 +48,41 @@ const configSchema = z.object({
     z.string().min(1).optional(),
   ),
   AUTOPILOT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  AUTOPILOT_REMOTE_WATCH_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  AUTOPILOT_REMOTE_WATCH_HOST: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
+  AUTOPILOT_REMOTE_WATCH_RUNNER_ID: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
+  AUTOPILOT_REMOTE_WATCH_CHANNEL_ID: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
+  AUTOPILOT_REMOTE_SESSION_DIR: z
+    .string()
+    .min(1)
+    .default("~/.discord-orchestrator/autopilot-sessions"),
+  AUTOPILOT_REMOTE_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5000),
+  AUTOPILOT_REMOTE_SESSION_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10),
+  AUTOPILOT_REMOTE_LOG_CHUNK_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(16384),
 });
 
 export type AppConfig = {
@@ -68,6 +103,14 @@ export type AppConfig = {
   autopilotWorkdir?: string;
   autopilotArtifactsDir?: string;
   autopilotPollIntervalMs: number;
+  autopilotRemoteWatchEnabled: boolean;
+  autopilotRemoteWatchHost?: string;
+  autopilotRemoteWatchRunnerId?: string;
+  autopilotRemoteWatchChannelId?: string;
+  autopilotRemoteSessionDir: string;
+  autopilotRemotePollIntervalMs: number;
+  autopilotRemoteSessionLimit: number;
+  autopilotRemoteLogChunkBytes: number;
 };
 
 export function loadConfig(): AppConfig {
@@ -107,6 +150,16 @@ export function loadConfig(): AppConfig {
       ? path.resolve(process.cwd(), parsed.AUTOPILOT_ARTIFACTS_DIR)
       : undefined,
     autopilotPollIntervalMs: parsed.AUTOPILOT_POLL_INTERVAL_MS,
+    autopilotRemoteWatchEnabled: parsed.AUTOPILOT_REMOTE_WATCH_ENABLED,
+    autopilotRemoteWatchHost: parsed.AUTOPILOT_REMOTE_WATCH_HOST,
+    autopilotRemoteWatchRunnerId:
+      parsed.AUTOPILOT_REMOTE_WATCH_RUNNER_ID ??
+      parsed.AUTOPILOT_REMOTE_WATCH_HOST,
+    autopilotRemoteWatchChannelId: parsed.AUTOPILOT_REMOTE_WATCH_CHANNEL_ID,
+    autopilotRemoteSessionDir: parsed.AUTOPILOT_REMOTE_SESSION_DIR,
+    autopilotRemotePollIntervalMs: parsed.AUTOPILOT_REMOTE_POLL_INTERVAL_MS,
+    autopilotRemoteSessionLimit: parsed.AUTOPILOT_REMOTE_SESSION_LIMIT,
+    autopilotRemoteLogChunkBytes: parsed.AUTOPILOT_REMOTE_LOG_CHUNK_BYTES,
   };
 }
 

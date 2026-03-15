@@ -7,6 +7,7 @@ import { Events, MessageFlags } from "discord.js";
 
 import type { AppConfig } from "../config.js";
 import { createJobLogStreamer } from "./logStream.js";
+import { startManualAutopilotWatcher } from "../jobs/manualAutopilotWatcher.js";
 import type { JobStore } from "../jobs/store.js";
 import type { Logger } from "../util/logger.js";
 import type { JobRecord, RunnerTarget } from "../jobs/types.js";
@@ -30,6 +31,15 @@ export function attachInteractionHandlers(
 ): void {
   const jobMessages = createJobMessageUpdater(client, logger);
   const logStreamer = createJobLogStreamer(client, store, logger);
+  startManualAutopilotWatcher(
+    client,
+    config,
+    logger,
+    store,
+    jobs,
+    jobMessages.updateJobMessage,
+    logStreamer.streamJobLogs,
+  );
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) {
