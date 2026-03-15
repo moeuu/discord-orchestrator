@@ -8,6 +8,7 @@ import { Events, MessageFlags } from "discord.js";
 import type { AppConfig } from "../config.js";
 import { createJobLogStreamer } from "./logStream.js";
 import { startManualAutopilotWatcher } from "../jobs/manualAutopilotWatcher.js";
+import { extractChatShellCommand } from "./chatCommands.js";
 import type { JobStore } from "../jobs/store.js";
 import type { Logger } from "../util/logger.js";
 import type { JobRecord, RunnerTarget } from "../jobs/types.js";
@@ -67,6 +68,51 @@ export function attachInteractionHandlers(
       } else {
         await interaction.reply({ content, flags: MessageFlags.Ephemeral });
       }
+    }
+  });
+
+  client.on(Events.MessageCreate, async (message) => {
+    if (!config.chatCommandsEnabled || message.author.bot) {
+      return;
+    }
+
+    if (
+      config.chatCommandsRequireMention &&
+      !message.mentions.users.has(client.user?.id ?? "")
+    ) {
+      return;
+    }
+
+    if (
+      config.chatCommandsAllowedUserIds.length > 0 &&
+      !config.chatCommandsAllowedUserIds.includes(message.author.id)
+    ) {
+      return;
+    }
+
+    const command = extractChatShellCommand(message.content, client.user?.id);
+    if (!command) {
+      return;
+    }
+
+    try {
+      let job = await jobs.createShellJob({
+        command,
+        discordChannelId: message.channelId,
+      });
+      const reply = await message.reply({ embeds: [buildJobEmbed(job)] });
+      job = await store.update(job.id, {
+        discord_message_id: reply.id,
+      });
+      await reply.edit({ embeds: [buildJobEmbed(job)] });
+
+      void jobs.startShellJob(job.id, async (updatedJob) => {
+        await jobMessages.updateJobMessage(updatedJob);
+        await logStreamer.streamJobLogs(updatedJob);
+      });
+    } catch (error) {
+      logger.error("Chat command failed", error);
+      await message.reply("コマンド実行の開始に失敗しました。");
     }
   });
 }

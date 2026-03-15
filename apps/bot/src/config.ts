@@ -35,6 +35,22 @@ const configSchema = z.object({
   JOB_DATA_DIR: z.string().min(1).default("../../data"),
   LOG_DIR: z.string().min(1).default("../../logs"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  CHAT_COMMANDS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  CHAT_COMMANDS_REQUIRE_MENTION: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  CHAT_COMMANDS_ALLOWED_USER_IDS: z.preprocess(
+    emptyToUndefined,
+    z.string().optional(),
+  ),
+  CHAT_COMMANDS_WORKDIR: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
   DASHBOARD_PORT: z.coerce.number().int().positive().default(8787),
   DASHBOARD_BASE_URL: z
     .preprocess(emptyToUndefined, z.string().url().optional()),
@@ -97,6 +113,10 @@ export type AppConfig = {
   jobDataDir: string;
   logDir: string;
   logLevel: "debug" | "info" | "warn" | "error";
+  chatCommandsEnabled: boolean;
+  chatCommandsRequireMention: boolean;
+  chatCommandsAllowedUserIds: string[];
+  chatCommandsWorkdir: string;
   dashboardPort: number;
   dashboardBaseUrl: string;
   autopilotBin: string;
@@ -138,6 +158,13 @@ export function loadConfig(): AppConfig {
     jobDataDir: path.resolve(process.cwd(), parsed.JOB_DATA_DIR),
     logDir: path.resolve(process.cwd(), parsed.LOG_DIR),
     logLevel: parsed.LOG_LEVEL,
+    chatCommandsEnabled: parsed.CHAT_COMMANDS_ENABLED,
+    chatCommandsRequireMention: parsed.CHAT_COMMANDS_REQUIRE_MENTION,
+    chatCommandsAllowedUserIds: splitList(parsed.CHAT_COMMANDS_ALLOWED_USER_IDS),
+    chatCommandsWorkdir: path.resolve(
+      process.cwd(),
+      parsed.CHAT_COMMANDS_WORKDIR ?? workspaceSourceRepo,
+    ),
     dashboardPort: parsed.DASHBOARD_PORT,
     dashboardBaseUrl:
       parsed.DASHBOARD_BASE_URL ??
@@ -161,6 +188,17 @@ export function loadConfig(): AppConfig {
     autopilotRemoteSessionLimit: parsed.AUTOPILOT_REMOTE_SESSION_LIMIT,
     autopilotRemoteLogChunkBytes: parsed.AUTOPILOT_REMOTE_LOG_CHUNK_BYTES,
   };
+}
+
+function splitList(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function detectGitRepoRoot(cwd: string): string {

@@ -28,10 +28,17 @@ async function main(): Promise<void> {
       artifactsDir: config.autopilotArtifactsDir,
       pollIntervalMs: config.autopilotPollIntervalMs,
     },
+    {
+      workdir: config.chatCommandsWorkdir,
+    },
   );
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
   });
 
   attachInteractionHandlers(client, config, logger, store, jobs);

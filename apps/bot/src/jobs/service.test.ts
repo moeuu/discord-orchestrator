@@ -27,6 +27,8 @@ describe("createJobService", () => {
     }, {
       autopilotBin: "uv",
       workdir: tempRoot,
+    }, {
+      workdir: tempRoot,
     });
 
     const job = await service.createJob({
@@ -53,6 +55,8 @@ describe("createJobService", () => {
       sourceRepo: tempRoot,
     }, {
       autopilotBin: "uv",
+      workdir: tempRoot,
+    }, {
       workdir: tempRoot,
     });
 

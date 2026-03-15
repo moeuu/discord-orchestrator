@@ -39,6 +39,10 @@ DISCORD_APP_ID=...
 DISCORD_GUILD_ID=...
 WORKSPACE_ROOT=../../data/workspaces
 WORKSPACE_SOURCE_REPO=/absolute/path/to/source/repo
+CHAT_COMMANDS_ENABLED=false
+CHAT_COMMANDS_REQUIRE_MENTION=true
+CHAT_COMMANDS_ALLOWED_USER_IDS=
+CHAT_COMMANDS_WORKDIR=/absolute/path/to/workdir
 AUTOPILOT_WORKDIR=/absolute/path/to/kaggle-autopilot
 AUTOPILOT_ARTIFACTS_DIR=/absolute/path/to/kaggle-autopilot/artifacts
 AUTOPILOT_REMOTE_WATCH_ENABLED=true
@@ -48,6 +52,8 @@ AUTOPILOT_REMOTE_WATCH_CHANNEL_ID=<discord channel id>
 ```
 
 `WORKSPACE_SOURCE_REPO` を省略した場合は、bot 起動時の Git リポジトリルートを clone 元として使います。`CODEX_FULL_AUTO=false` と `CODEX_SANDBOX=` がデフォルトで、必要なときだけ `--full-auto` または `--sandbox` を環境変数経由で有効化できます。
+
+Discord チャットから shell コマンドを直接起動したい場合は `CHAT_COMMANDS_ENABLED=true` を設定してください。デフォルトでは bot mention 必須で、メッセージ中の fenced code block / backtick / `「...」っていうコマンドを実行して` からコマンド文字列を抽出して実行します。安全のため `CHAT_COMMANDS_ALLOWED_USER_IDS=123,456` のように allowlist も併用してください。
 
 Autopilot の進捗ダッシュボードは `DASHBOARD_PORT` と `DASHBOARD_BASE_URL` で設定します。デフォルトでは `http://127.0.0.1:8787` に立ち上がり、`/jobs/<job-id>` で iter ごとの戦略、metrics、ログ末尾を確認できます。
 

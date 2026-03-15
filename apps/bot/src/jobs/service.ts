@@ -13,6 +13,10 @@ import {
   type CodexExecConfig,
   type CodexEvent,
 } from "./codexExec.js";
+import {
+  createShellExecutor,
+  type ShellExecConfig,
+} from "./shellExec.js";
 import type { JobStore } from "./store.js";
 import type {
   JobProgress,
@@ -35,6 +39,11 @@ type JobService = {
     discordChannelId: string;
   }): Promise<JobRecord>;
   startJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
+  createShellJob(input: {
+    command: string;
+    discordChannelId: string;
+  }): Promise<JobRecord>;
+  startShellJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
   createAutopilotJob(input: {
     competition: string;
     instruction: string;
@@ -79,10 +88,12 @@ export function createJobService(
   logger: Logger,
   codexConfig: CodexExecConfig,
   autopilotConfig: AutopilotConfig,
+  shellConfig: ShellExecConfig,
 ): JobService {
   const activeJobs = new Map<string, ActiveJob>();
   const codexExecutor = createCodexExecutor(codexConfig, logger);
   const autopilotExecutor = createAutopilotExecutor(autopilotConfig, logger);
+  const shellExecutor = createShellExecutor(shellConfig, logger);
 
   return {
     async createJob({ prompt, target, discordChannelId }) {
@@ -133,6 +144,56 @@ export function createJobService(
             }
           },
         });
+
+        const finalJob = await store.update(jobId, {
+          status: result.status,
+          finished_at: result.finished_at,
+          summary: result.summary,
+        });
+        await onUpdate(finalJob);
+      }, logger, store, onUpdate);
+    },
+    async createShellJob({ command, discordChannelId }) {
+      let job = await store.create({
+        tool: "shell",
+        prompt: command,
+        target: "local",
+        status: "queued",
+        discord_channel_id: discordChannelId,
+        input: {
+          command,
+        },
+        summary: "Queued shell command",
+      });
+
+      job = await ensureLogPath(store, logDir, job);
+      return job;
+    },
+    async startShellJob(jobId, onUpdate) {
+      return await startTrackedJob(activeJobs, jobId, async (abortController) => {
+        let job = await requireJob(store, jobId);
+        const command =
+          typeof job.input?.command === "string" ? job.input.command : job.prompt;
+
+        job = await ensureLogPath(store, logDir, job);
+        job = await store.update(jobId, {
+          status: "running",
+          started_at: new Date().toISOString(),
+          summary: `Running shell command: ${command}`,
+        });
+        await onUpdate(job);
+
+        const result = await shellExecutor.run(
+          job,
+          { command },
+          {
+            signal: abortController.signal,
+            onPid: async (pid) => {
+              const updated = await store.update(jobId, { pid });
+              await onUpdate(updated);
+            },
+          },
+        );
 
         const finalJob = await store.update(jobId, {
           status: result.status,
@@ -409,7 +470,7 @@ async function ensureLogPath(
     return job;
   }
 
-  const extension = job.tool === "autopilot" ? "log" : "jsonl";
+  const extension = job.tool === "codex" ? "jsonl" : "log";
   const logPath = path.join(logDir, `${job.tool}-${job.id}.${extension}`);
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   await fs.writeFile(logPath, "", "utf8");

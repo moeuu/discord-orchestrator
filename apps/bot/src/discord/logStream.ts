@@ -41,7 +41,11 @@ export function createJobLogStreamer(
 
   return {
     async streamJobLogs(job) {
-      if (job.tool !== "autopilot" || !job.log_path || !job.discord_message_id) {
+      if (
+        !["autopilot", "shell"].includes(job.tool) ||
+        !job.log_path ||
+        !job.discord_message_id
+      ) {
         return;
       }
 
@@ -193,7 +197,7 @@ async function startLogThread(
     });
 
     await thread.send(
-      `Autopilot log stream started for job \`${job.id}\`. New log lines will be posted here.`,
+      `Live ${job.tool} log stream started for job \`${job.id}\`. New log lines will be posted here.`,
     );
     return thread;
   } catch (error) {

@@ -1,5 +1,5 @@
 export type RunnerTarget = "local" | "ssh";
-export type JobTool = "codex" | "autopilot";
+export type JobTool = "codex" | "autopilot" | "shell";
 
 export type JobStatus =
   | "queued"
