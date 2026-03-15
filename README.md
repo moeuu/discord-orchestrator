@@ -31,6 +31,27 @@ npm test
 npm run dev
 ```
 
+`.env` には少なくとも以下を設定します。
+
+```env
+DISCORD_TOKEN=...
+DISCORD_APP_ID=...
+DISCORD_GUILD_ID=...
+```
+
+## 動作確認
+
+```sh
+cd apps/bot
+npm run register
+npm run dev
+```
+
+bot 起動後、開発用 Guild で以下を確認します。
+
+- `/ping` が `pong` を返す
+- `/codex status` がジョブ未作成時メッセージまたは最新ジョブを返す
+
 ## Discord セットアップ概要
 
 1. Discord Developer Portal でアプリケーションを作成

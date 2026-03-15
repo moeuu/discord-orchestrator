@@ -20,6 +20,7 @@ export function attachInteractionHandlers(
   const store = createJobStore(config.jobDataDir);
   const jobs = createJobService(store, config.logDir, logger);
 
+  // Only slash command interactions are handled in this bot.
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) {
       return;

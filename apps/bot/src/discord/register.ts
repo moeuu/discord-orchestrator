@@ -5,7 +5,7 @@ import { commandDefinitions } from "./commands.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-
+  // Register commands to a single development guild for fast iteration.
   const rest = new REST({ version: "10" }).setToken(config.discordToken);
 
   await rest.put(
@@ -23,4 +23,3 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-
