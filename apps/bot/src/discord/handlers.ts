@@ -207,11 +207,10 @@ export function attachInteractionHandlers(
               action.message,
               config.botRunnerId,
               message.channelId,
-              message.channelId,
+              shouldStartNewCodexSession(message.content),
               message,
               store,
               jobs,
-              chatSessions,
             );
             return;
         }
@@ -226,11 +225,10 @@ export function attachInteractionHandlers(
         "",
         config.botRunnerId,
         message.channelId,
-        message.channelId,
+        shouldStartNewCodexSession(message.content),
         message,
         store,
         jobs,
-        chatSessions,
       );
     } catch (error) {
       logger.error("Chat command failed", error);
@@ -275,21 +273,23 @@ async function launchCodexJob(
   prefixMessage: string,
   runnerId: string,
   discordChannelId: string,
-  sessionKey: string,
+  startNewSession: boolean,
   message: {
     reply(options: { content?: string; embeds?: InteractionReplyOptions["embeds"] }): Promise<{ id: string; edit(options: { embeds: InteractionReplyOptions["embeds"] }): Promise<unknown> }>;
   },
   store: JobStore,
   jobs: JobService,
-  chatSessions: ReturnType<typeof createChatSessionStore>,
 ): Promise<void> {
-  const session = await chatSessions.get(sessionKey);
+  const normalizedPrompt = stripCodexSessionDirective(prompt);
+  const externalId = startNewSession
+    ? undefined
+    : await resolveLatestCodexSessionId(store, discordChannelId, runnerId);
   let job = await jobs.createJob({
-    prompt,
+    prompt: normalizedPrompt,
     target: "runner",
     runnerId,
     discordChannelId,
-    externalId: session?.threadId,
+    externalId,
   });
   const reply = await message.reply({
     content: prefixMessage || undefined,
@@ -404,15 +404,25 @@ async function handleCodexRun(
   jobs: JobService,
 ): Promise<void> {
   const prompt = interaction.options.getString("prompt", true);
+  const newSession = interaction.options.getBoolean("new_session") ?? false;
   const discordChannelId = interaction.channelId ?? "unknown";
 
   await interaction.deferReply();
 
+  const normalizedPrompt = stripCodexSessionDirective(prompt);
+  const externalId = newSession
+    ? undefined
+    : await resolveLatestCodexSessionId(
+        store,
+        discordChannelId,
+        config.botRunnerId,
+      );
   let job = await jobs.createJob({
-    prompt,
+    prompt: normalizedPrompt,
     target: "runner",
     runnerId: config.botRunnerId,
     discordChannelId,
+    externalId,
   });
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
 
@@ -519,4 +529,48 @@ function truncateLog(value: string): string {
   }
 
   return `${value.slice(-1800)}`;
+}
+
+async function resolveLatestCodexSessionId(
+  store: JobStore,
+  discordChannelId: string,
+  runnerId: string,
+): Promise<string | undefined> {
+  const jobs = await store.list();
+  return findLatestCodexSessionId(jobs, discordChannelId, runnerId) ?? undefined;
+}
+
+export function findLatestCodexSessionId(
+  jobs: JobRecord[],
+  discordChannelId: string,
+  runnerId: string,
+): string | null {
+  for (const job of jobs) {
+    if (
+      job.tool === "codex" &&
+      job.target === "runner" &&
+      job.discord_channel_id === discordChannelId &&
+      job.runner_id === runnerId &&
+      typeof job.external_id === "string" &&
+      job.external_id.trim()
+    ) {
+      return job.external_id;
+    }
+  }
+
+  return null;
+}
+
+export function shouldStartNewCodexSession(content: string): boolean {
+  return shouldResetChatSession(content);
+}
+
+export function stripCodexSessionDirective(prompt: string): string {
+  const trimmed = prompt.trim();
+  const stripped = trimmed.replace(
+    /^(?:新しいセッション(?:で|を開始して)?|セッションをリセット(?:して)?|会話をリセット(?:して)?|reset session|new session)\s*[:：]?\s*/i,
+    "",
+  );
+
+  return stripped.trim() || trimmed;
 }

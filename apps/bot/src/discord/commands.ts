@@ -16,6 +16,11 @@ export const commandDefinitions = [
             .setName("prompt")
             .setDescription("Codex に渡す指示")
             .setRequired(true),
+        )
+        .addBooleanOption((option) =>
+          option
+            .setName("new_session")
+            .setDescription("新しい Codex セッションとして開始する"),
         ),
     )
     .addSubcommand((subcommand) =>
