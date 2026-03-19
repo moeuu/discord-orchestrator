@@ -34,6 +34,9 @@ export function createJobLogStreamer(
   client: Client,
   store: JobStore,
   logger: Logger,
+  options: {
+    useThreads: boolean;
+  },
 ): {
   streamJobLogs(job: JobRecord): Promise<void>;
 } {
@@ -165,6 +168,14 @@ export function createJobLogStreamer(
       throw new Error(`Channel is not text-based: ${job.discord_channel_id}`);
     }
 
+    if (!options.useThreads) {
+      return {
+        id: channel.id,
+        isThread: false,
+        send: channel.send.bind(channel),
+      };
+    }
+
     const message = await channel.messages.fetch(job.discord_message_id!);
     const thread = await startLogThread(message, job, logger);
     if (thread) {
@@ -196,9 +207,11 @@ async function startLogThread(
       reason: `Live logs for job ${job.id}`,
     });
 
-    await thread.send(
-      `Live ${job.tool} log stream started for job \`${job.id}\`. New log lines will be posted here.`,
-    );
+    await thread.send([
+      `ログはこのスレッドに流します。`,
+      `依頼: ${job.prompt}`,
+      `job: \`${job.id}\``,
+    ].join("\n"));
     return thread;
   } catch (error) {
     logger.warn(`Falling back to channel log streaming for job ${job.id}`, error);

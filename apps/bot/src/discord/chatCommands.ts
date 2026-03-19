@@ -1,8 +1,9 @@
 export function extractChatShellCommand(
   content: string,
   botUserId?: string,
+  botRoleIds: string[] = [],
 ): string | null {
-  const normalized = stripMention(content, botUserId).trim();
+  const normalized = stripMention(content, botUserId, botRoleIds).trim();
   if (!normalized || !normalized.includes("実行")) {
     return null;
   }
@@ -33,17 +34,39 @@ export function extractChatShellCommand(
     return doubleQuote;
   }
 
+  const plainText = matchFirst(
+    normalized,
+    /^(.+?)(?:\s*っていう)?(?:\s*コマンド)?を実行して[。.!！?？]*$/s,
+  );
+  if (plainText) {
+    return plainText;
+  }
+
   return null;
 }
 
-function stripMention(content: string, botUserId?: string): string {
-  if (!botUserId) {
-    return content;
+function stripMention(
+  content: string,
+  botUserId?: string,
+  botRoleIds: string[] = [],
+): string {
+  let normalized = content;
+
+  if (botUserId) {
+    normalized = normalized.replace(
+      new RegExp(`<@!?${escapeRegExp(botUserId)}>`, "g"),
+      "",
+    );
   }
 
-  return content
-    .replace(new RegExp(`<@!?${escapeRegExp(botUserId)}>`, "g"), "")
-    .trim();
+  for (const roleId of botRoleIds) {
+    normalized = normalized.replace(
+      new RegExp(`<@&${escapeRegExp(roleId)}>`, "g"),
+      "",
+    );
+  }
+
+  return normalized.trim();
 }
 
 function matchFirst(content: string, pattern: RegExp): string | null {

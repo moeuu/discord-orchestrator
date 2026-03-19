@@ -9,6 +9,9 @@ import type { AppConfig } from "../config.js";
 import { createJobLogStreamer } from "./logStream.js";
 import { startManualAutopilotWatcher } from "../jobs/manualAutopilotWatcher.js";
 import { extractChatShellCommand } from "./chatCommands.js";
+import { createChatLlmRouter } from "./chatLlmRouter.js";
+import { createChatSessionStore } from "./chatSessionStore.js";
+import { shouldResetChatSession } from "./chatLlmRouter.js";
 import type { JobStore } from "../jobs/store.js";
 import type { Logger } from "../util/logger.js";
 import type { JobRecord, RunnerTarget } from "../jobs/types.js";
@@ -31,7 +34,23 @@ export function attachInteractionHandlers(
   jobs: JobService,
 ): void {
   const jobMessages = createJobMessageUpdater(client, logger);
-  const logStreamer = createJobLogStreamer(client, store, logger);
+  const logStreamer = createJobLogStreamer(client, store, logger, {
+    useThreads: config.logStreamUseThreads,
+  });
+  const chatSessions = createChatSessionStore(config.jobDataDir);
+  const chatLlmRouter =
+    config.chatLlmEnabled
+      ? createChatLlmRouter(
+          {
+            codexBin: config.codexBin,
+            model: config.chatLlmModel,
+            workdir: config.chatCommandsWorkdir,
+            sessions: chatSessions,
+          },
+          logger,
+        )
+      : null;
+
   startManualAutopilotWatcher(
     client,
     config,
@@ -72,14 +91,40 @@ export function attachInteractionHandlers(
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (!config.chatCommandsEnabled || message.author.bot) {
+    if (message.author.bot) {
+      return;
+    }
+
+    const botUserId = client.user?.id ?? "";
+    const botRoleIds = message.guild?.roles.cache
+      .filter((role) => role.name === (client.user?.username ?? ""))
+      .map((role) => role.id) ?? [];
+    const mentionsBot =
+      message.mentions.users.has(botUserId) ||
+      message.mentions.roles.some((role) => botRoleIds.includes(role.id));
+
+    logger.info("Observed guild message", {
+      authorId: message.author.id,
+      channelId: message.channelId,
+      mentionsBot,
+      botRoleIds,
+      chatCommandsEnabled: config.chatCommandsEnabled,
+      requireMention: config.chatCommandsRequireMention,
+      preview: message.content.slice(0, 160),
+    });
+
+    if (!config.chatCommandsEnabled) {
       return;
     }
 
     if (
       config.chatCommandsRequireMention &&
-      !message.mentions.users.has(client.user?.id ?? "")
+      !mentionsBot
     ) {
+      logger.info("Ignored message without bot mention", {
+        authorId: message.author.id,
+        channelId: message.channelId,
+      });
       return;
     }
 
@@ -87,33 +132,173 @@ export function attachInteractionHandlers(
       config.chatCommandsAllowedUserIds.length > 0 &&
       !config.chatCommandsAllowedUserIds.includes(message.author.id)
     ) {
+      logger.info("Ignored message from non-allowlisted user", {
+        authorId: message.author.id,
+        channelId: message.channelId,
+      });
       return;
     }
 
-    const command = extractChatShellCommand(message.content, client.user?.id);
-    if (!command) {
-      return;
-    }
+    logger.info("Received chat mention", {
+      authorId: message.author.id,
+      channelId: message.channelId,
+      usesLlm: config.chatLlmEnabled,
+      preview: message.content.slice(0, 160),
+    });
 
+    const command = extractChatShellCommand(
+      message.content,
+      client.user?.id,
+      botRoleIds,
+    );
     try {
-      let job = await jobs.createShellJob({
-        command,
-        discordChannelId: message.channelId,
-      });
-      const reply = await message.reply({ embeds: [buildJobEmbed(job)] });
-      job = await store.update(job.id, {
-        discord_message_id: reply.id,
-      });
-      await reply.edit({ embeds: [buildJobEmbed(job)] });
+      if (config.chatLlmEnabled) {
+        if (!chatLlmRouter) {
+          await message.reply("Chat LLM router を初期化できませんでした。");
+          return;
+        }
 
-      void jobs.startShellJob(job.id, async (updatedJob) => {
-        await jobMessages.updateJobMessage(updatedJob);
-        await logStreamer.streamJobLogs(updatedJob);
-      });
+        const action = await chatLlmRouter.route({
+          content: message.content,
+          sessionKey: message.channelId,
+          botUserId: client.user?.id,
+          botRoleIds,
+          resetSession: shouldResetChatSession(message.content),
+        });
+
+        logger.info("Chat mention routed", {
+          action: action.action,
+          rationale: action.rationale,
+        });
+
+        switch (action.action) {
+          case "reply":
+            await message.reply(
+              action.message || "どう処理すべきか判断できませんでした。",
+            );
+            return;
+          case "shell":
+            if (!action.shell_command.trim()) {
+              await message.reply("実行する shell command を決められませんでした。");
+              return;
+            }
+            await launchShellJob(
+              action.shell_command,
+              action.message,
+              message.channelId,
+              message,
+              store,
+              jobs,
+              jobMessages.updateJobMessage,
+              logStreamer.streamJobLogs,
+            );
+            return;
+          case "codex":
+            if (!action.codex_prompt.trim()) {
+              await message.reply("Codex に渡す prompt を決められませんでした。");
+              return;
+            }
+            await launchCodexJob(
+              action.codex_prompt,
+              action.message,
+              message.channelId,
+              message.channelId,
+              message,
+              store,
+              jobs,
+              jobMessages.updateJobMessage,
+              chatSessions,
+            );
+            return;
+          }
+      }
+
+      if (!command) {
+        return;
+      }
+
+      await launchShellJob(
+        command,
+        "",
+        message.channelId,
+        message,
+        store,
+        jobs,
+        jobMessages.updateJobMessage,
+        logStreamer.streamJobLogs,
+      );
     } catch (error) {
       logger.error("Chat command failed", error);
       await message.reply("コマンド実行の開始に失敗しました。");
     }
+  });
+}
+
+async function launchShellJob(
+  command: string,
+  prefixMessage: string,
+  discordChannelId: string,
+  message: {
+    reply(options: { content?: string; embeds?: InteractionReplyOptions["embeds"] }): Promise<{ id: string; edit(options: { embeds: InteractionReplyOptions["embeds"] }): Promise<unknown> }>;
+  },
+  store: JobStore,
+  jobs: JobService,
+  updateJobMessage: UpdateJobMessage,
+  streamJobLogs: StreamJobLogs,
+): Promise<void> {
+  let job = await jobs.createShellJob({
+    command,
+    discordChannelId,
+  });
+  const reply = await message.reply({
+    content: prefixMessage || undefined,
+    embeds: [buildJobEmbed(job)],
+  });
+  job = await store.update(job.id, {
+    discord_message_id: reply.id,
+  });
+  await reply.edit({ embeds: [buildJobEmbed(job)] });
+
+  void jobs.startShellJob(job.id, async (updatedJob) => {
+    await updateJobMessage(updatedJob);
+    await streamJobLogs(updatedJob);
+  });
+}
+
+async function launchCodexJob(
+  prompt: string,
+  prefixMessage: string,
+  discordChannelId: string,
+  sessionKey: string,
+  message: {
+    reply(options: { content?: string; embeds?: InteractionReplyOptions["embeds"] }): Promise<{ id: string; edit(options: { embeds: InteractionReplyOptions["embeds"] }): Promise<unknown> }>;
+  },
+  store: JobStore,
+  jobs: JobService,
+  updateJobMessage: UpdateJobMessage,
+  chatSessions: ReturnType<typeof createChatSessionStore>,
+): Promise<void> {
+  const session = await chatSessions.get(sessionKey);
+  let job = await jobs.createJob({
+    prompt,
+    target: "local",
+    discordChannelId,
+    externalId: session?.threadId,
+  });
+  const reply = await message.reply({
+    content: prefixMessage || undefined,
+    embeds: [buildJobEmbed(job)],
+  });
+  job = await store.update(job.id, {
+    discord_message_id: reply.id,
+  });
+  await reply.edit({ embeds: [buildJobEmbed(job)] });
+
+  void jobs.startJob(job.id, async (updatedJob) => {
+    if (updatedJob.external_id) {
+      await chatSessions.set(sessionKey, updatedJob.external_id);
+    }
+    await updateJobMessage(updatedJob);
   });
 }
 

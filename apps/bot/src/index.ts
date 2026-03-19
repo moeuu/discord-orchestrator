@@ -33,13 +33,16 @@ async function main(): Promise<void> {
     },
   );
 
-  const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
+  const intents = [GatewayIntentBits.Guilds];
+
+  if (config.chatCommandsEnabled) {
+    intents.push(
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
-    ],
-  });
+    );
+  }
+
+  const client = new Client({ intents });
 
   attachInteractionHandlers(client, config, logger, store, jobs);
   startDashboardServer(config.dashboardPort, jobs, logger);
@@ -52,6 +55,19 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error);
+  if (
+    error instanceof Error &&
+    error.message.includes("Used disallowed intents")
+  ) {
+    console.error(
+      [
+        "Discord Message Content Intent is not enabled for this bot.",
+        "Either enable Message Content Intent in the Discord Developer Portal,",
+        "or set CHAT_COMMANDS_ENABLED=false in apps/bot/.env and restart.",
+      ].join(" "),
+    );
+  } else {
+    console.error(error);
+  }
   process.exitCode = 1;
 });

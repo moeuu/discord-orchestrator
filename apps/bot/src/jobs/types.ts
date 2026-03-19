@@ -10,12 +10,15 @@ export type JobStatus =
 
 export type JobProgress = {
   phase?: string;
+  activity?: string;
+  active_command?: string;
   competition_slug?: string;
   run_id?: string;
   current_iter?: number;
   max_iterations?: number;
   strategy_summary?: string;
   latest_agent_message?: string;
+  recent_logs?: string[];
   best_metric?: string;
   best_metric_name?: string;
   submission_status?: string;

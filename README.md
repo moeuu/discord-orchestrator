@@ -1,6 +1,6 @@
 # discord-codex-orchestrator
 
-Discord Slash Command を入口にして、Codex CLI と Kaggle Autopilot のジョブ実行、進捗更新、ダッシュボード表示を扱う Discord Bot リポジトリです。OpenAI API は使わず、ローカルで ChatGPT ログイン済みの `codex` CLI と `uv run kagglebot autopilot ...` を使う前提で組みます。
+Discord Slash Command を入口にして、Codex CLI と Kaggle Autopilot のジョブ実行、進捗更新、ダッシュボード表示を扱う Discord Bot リポジトリです。基本はローカルの `codex` CLI と `uv run kagglebot autopilot ...` を使い、必要なら Discord の `@mention` もローカルの `codex exec` に渡して `reply / shell / codex` を振り分けられます。
 
 ## ディレクトリ構成
 
@@ -21,6 +21,24 @@ discord-codex-orchestrator/
 3. `cd apps/bot && npm install`
 4. `npm run register` でスラッシュコマンドをギルドへ登録
 5. `npm run dev` で bot を起動
+
+普段の起動と再起動は repo ルートから `./scripts/botctl.sh` を使う方が楽です。
+
+```sh
+./scripts/botctl.sh start
+./scripts/botctl.sh restart
+./scripts/botctl.sh status
+./scripts/botctl.sh logs
+./scripts/botctl.sh reload
+```
+
+- `start`: bot をバックグラウンド起動
+- `restart`: bot を再起動
+- `status`: 起動中か確認
+- `logs`: `logs/bot-runtime.log` を tail
+- `reload`: slash command を再登録してから再起動
+
+PID は `data/runtime/bot.pid`、実行ログは `logs/bot-runtime.log` に保存します。
 
 最低限の確認は以下です。
 
@@ -43,6 +61,9 @@ CHAT_COMMANDS_ENABLED=false
 CHAT_COMMANDS_REQUIRE_MENTION=true
 CHAT_COMMANDS_ALLOWED_USER_IDS=
 CHAT_COMMANDS_WORKDIR=/absolute/path/to/workdir
+CHAT_LLM_ENABLED=false
+CHAT_LLM_MODEL=gpt-5.4
+LOG_STREAM_USE_THREADS=false
 AUTOPILOT_WORKDIR=/absolute/path/to/kaggle-autopilot
 AUTOPILOT_ARTIFACTS_DIR=/absolute/path/to/kaggle-autopilot/artifacts
 AUTOPILOT_REMOTE_WATCH_ENABLED=true
@@ -54,6 +75,14 @@ AUTOPILOT_REMOTE_WATCH_CHANNEL_ID=<discord channel id>
 `WORKSPACE_SOURCE_REPO` を省略した場合は、bot 起動時の Git リポジトリルートを clone 元として使います。`CODEX_FULL_AUTO=false` と `CODEX_SANDBOX=` がデフォルトで、必要なときだけ `--full-auto` または `--sandbox` を環境変数経由で有効化できます。
 
 Discord チャットから shell コマンドを直接起動したい場合は `CHAT_COMMANDS_ENABLED=true` を設定してください。デフォルトでは bot mention 必須で、メッセージ中の fenced code block / backtick / `「...」っていうコマンドを実行して` からコマンド文字列を抽出して実行します。安全のため `CHAT_COMMANDS_ALLOWED_USER_IDS=123,456` のように allowlist も併用してください。
+
+この機能を使うときは Discord Developer Portal の Bot 設定で `Message Content Intent` も有効化してください。未設定のまま `CHAT_COMMANDS_ENABLED=true` で起動すると、bot は `Used disallowed intents` で接続できません。
+
+`@codex-bot` の通常メッセージを LLM に渡したい場合は `CHAT_LLM_ENABLED=true` を設定してください。bot はローカルの `codex exec` にメッセージを送り、`reply / shell / codex` のいずれかを JSON で返させて処理します。現行のデフォルト model は `gpt-5.4` です。
+
+この `@mention` 会話は channel ごとに Codex session を継続します。`action=codex` に分岐した実作業も同じ session を引き継ぐので、直後の follow-up では前の作業内容を前提に質問できます。明示的に `新しいセッション`、`セッションをリセット`、`会話をリセット` のように書いたときだけ、新しい session でやり直します。
+
+ログを毎回 thread に分けたくない場合は `LOG_STREAM_USE_THREADS=false` のまま使ってください。これが既定です。`true` にするとログ専用 thread を作ります。
 
 Autopilot の進捗ダッシュボードは `DASHBOARD_PORT` と `DASHBOARD_BASE_URL` で設定します。デフォルトでは `http://127.0.0.1:8787` に立ち上がり、`/jobs/<job-id>` で iter ごとの戦略、metrics、ログ末尾を確認できます。
 

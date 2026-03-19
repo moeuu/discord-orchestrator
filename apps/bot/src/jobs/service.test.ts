@@ -44,6 +44,73 @@ describe("createJobService", () => {
     expect(logInfo.preview).toBeNull();
   });
 
+  it("persists an existing codex session id on created jobs", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
+    const dataDir = path.join(tempRoot, "data");
+    const logDir = path.join(tempRoot, "logs");
+    const store = createJobStore(dataDir);
+    const service = createJobService(store, logDir, noopLogger, {
+      codexBin: "codex",
+      workspaceRoot: path.join(tempRoot, "workspaces"),
+      sourceRepo: tempRoot,
+    }, {
+      autopilotBin: "uv",
+      workdir: tempRoot,
+    }, {
+      workdir: tempRoot,
+    });
+
+    const job = await service.createJob({
+      prompt: "follow up",
+      target: "local",
+      discordChannelId: "channel-1",
+      externalId: "thread-123",
+    });
+
+    expect(job.external_id).toBe("thread-123");
+  });
+
+  it("formats codex jsonl logs into a readable preview", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
+    const dataDir = path.join(tempRoot, "data");
+    const logDir = path.join(tempRoot, "logs");
+    const store = createJobStore(dataDir);
+    const service = createJobService(store, logDir, noopLogger, {
+      codexBin: "codex",
+      workspaceRoot: path.join(tempRoot, "workspaces"),
+      sourceRepo: tempRoot,
+    }, {
+      autopilotBin: "uv",
+      workdir: tempRoot,
+    }, {
+      workdir: tempRoot,
+    });
+
+    const job = await service.createJob({
+      prompt: "inspect the repo",
+      target: "local",
+      discordChannelId: "channel-1",
+    });
+
+    await fs.writeFile(
+      job.log_path!,
+      [
+        "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}",
+        "{\"type\":\"turn.started\"}",
+        "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'git status --short --branch'\"}}",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'git status --short --branch'\",\"exit_code\":0}}",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"確認しました。\"}}",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const logInfo = await service.getLogInfo(job.id);
+
+    expect(logInfo.preview).toContain("セッションを開始");
+    expect(logInfo.preview).toContain("実行完了(0): git status --short --branch");
+    expect(logInfo.preview).toContain("考え: 確認しました。");
+  });
+
   it("upserts a remote manual autopilot session by external id", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
     const dataDir = path.join(tempRoot, "data");

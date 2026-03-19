@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Logger } from "../util/logger.js";
 import { createLocalRunner, type Runner } from "./runner.js";
-import type { JobRecord, JobResult } from "./types.js";
+import type { JobProgress, JobRecord, JobResult } from "./types.js";
 
 type CodexExecSandboxMode =
   | "read-only"
@@ -35,6 +35,8 @@ type AgentMessageState = {
   content: string;
 };
 
+const RECENT_CODEX_LOG_LIMIT = 5;
+
 export function createCodexExecutor(
   config: CodexExecConfig,
   logger: Logger,
@@ -49,6 +51,7 @@ export function createCodexExecutor(
       await fs.mkdir(path.dirname(logPath), { recursive: true });
 
       const args = buildCodexExecArgs(job.prompt, {
+        threadId: job.external_id,
         fullAuto: config.fullAuto,
         sandbox: config.sandbox,
       });
@@ -193,10 +196,22 @@ export function createCodexExecutor(
 export function buildCodexExecArgs(
   prompt: string,
   options: {
+    threadId?: string;
     fullAuto?: boolean;
     sandbox?: CodexExecSandboxMode;
   } = {},
 ): string[] {
+  if (options.threadId) {
+    const args = ["exec", "resume", options.threadId, "--json"];
+
+    if (options.fullAuto) {
+      args.push("--full-auto");
+    }
+
+    args.push(prompt);
+    return args;
+  }
+
   const args = ["exec", "--json"];
 
   if (options.fullAuto) {
@@ -232,6 +247,22 @@ export async function prepareWorkspace(
   if (clone.exitCode !== 0) {
     throw new Error(clone.stderr.trim() || "git clone failed");
   }
+
+  const preferredOrigin = await resolvePreferredOriginUrl(runner, sourceRepo);
+  if (preferredOrigin) {
+    const setRemote = await runner.run(
+      "git",
+      ["remote", "set-url", "origin", preferredOrigin],
+      {
+        cwd: workspaceDir,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    if (setRemote.exitCode !== 0) {
+      throw new Error(setRemote.stderr.trim() || "git remote set-url failed");
+    }
+  }
 }
 
 export function extractAgentMessage(
@@ -239,6 +270,10 @@ export function extractAgentMessage(
   state?: AgentMessageState,
 ): string | null {
   const eventType = typeof event.type === "string" ? event.type : null;
+  const item = event.item && typeof event.item === "object"
+    ? (event.item as Record<string, unknown>)
+    : null;
+  const itemType = typeof item?.type === "string" ? item.type : null;
   const lastMessage = extractText(event.last_agent_message);
   if (lastMessage) {
     if (state) {
@@ -246,6 +281,23 @@ export function extractAgentMessage(
       state.content = lastMessage;
     }
     return lastMessage;
+  }
+
+  if (
+    (eventType === "item.completed" || eventType === "item.started") &&
+    itemType === "agent_message"
+  ) {
+    const message =
+      extractText(item?.text) ??
+      extractText(item?.message) ??
+      extractText(item?.content);
+
+    if (message && state) {
+      state.activeItemId = typeof item?.id === "string" ? item.id : null;
+      state.content = message;
+    }
+
+    return message;
   }
 
   if (eventType === "agent_message") {
@@ -288,8 +340,339 @@ export function extractAgentMessage(
   return null;
 }
 
+export function buildCodexProgress(
+  previous: JobProgress | undefined,
+  event: CodexEvent,
+  agentMessage: string | null,
+): JobProgress {
+  const next: JobProgress = {
+    ...(previous ?? {}),
+    updated_at: new Date().toISOString(),
+  };
+  const eventType = typeof event.type === "string" ? event.type : null;
+  const commandState = getCommandExecutionState(event);
+  const activity = describeCodexActivity(event, agentMessage);
+  const logLine = describeCodexLogEvent(event, agentMessage);
+
+  if (agentMessage) {
+    next.latest_agent_message = agentMessage;
+  }
+
+  if (activity) {
+    next.activity = activity;
+  }
+
+  if (commandState?.status === "started") {
+    next.active_command = commandState.command;
+  } else if (commandState?.status === "completed") {
+    delete next.active_command;
+  } else if (eventType === "turn.completed" || eventType === "task_complete") {
+    delete next.active_command;
+  }
+
+  const phase = describeCodexPhase(event, agentMessage);
+  if (phase) {
+    next.phase = phase;
+  }
+
+  if (logLine) {
+    const current = Array.isArray(previous?.recent_logs)
+      ? previous.recent_logs
+      : [];
+    const deduped =
+      current[current.length - 1] === logLine
+        ? current
+        : [...current, logLine].slice(-RECENT_CODEX_LOG_LIMIT);
+    next.recent_logs = deduped;
+  } else if (previous?.recent_logs) {
+    next.recent_logs = previous.recent_logs;
+  }
+
+  return next;
+}
+
+export function renderCodexLogPreview(
+  contents: string,
+  limit = RECENT_CODEX_LOG_LIMIT,
+): string | null {
+  const lines = contents
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const state: AgentMessageState = {
+    activeItemId: null,
+    content: "",
+  };
+  const rendered: string[] = [];
+
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as CodexEvent;
+      const agentMessage = extractAgentMessage(event, state);
+      const summary = describeCodexLogEvent(event, agentMessage);
+      if (summary) {
+        rendered.push(summary);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  if (rendered.length === 0) {
+    return null;
+  }
+
+  return rendered.slice(-limit).join("\n");
+}
+
 async function appendJsonLine(logPath: string, event: CodexEvent): Promise<void> {
   await fs.appendFile(logPath, `${JSON.stringify(event)}\n`, "utf8");
+}
+
+function describeCodexPhase(
+  event: CodexEvent,
+  agentMessage: string | null,
+): string | null {
+  const eventType = typeof event.type === "string" ? event.type : null;
+  const commandState = getCommandExecutionState(event);
+
+  if (commandState?.status === "started") {
+    return "コマンド実行中";
+  }
+
+  if (commandState?.status === "completed") {
+    return "コマンド結果を確認中";
+  }
+
+  if (
+    eventType === "agent_message" ||
+    eventType === "agent_message_delta" ||
+    eventType === "agent_message_content_delta"
+  ) {
+    return "考え中";
+  }
+
+  if (
+    (eventType === "item.started" || eventType === "item.completed") &&
+    getItemType(event) === "agent_message"
+  ) {
+    return "考え中";
+  }
+
+  if (eventType === "thread.started") {
+    return "セッション開始";
+  }
+
+  if (eventType === "turn.started") {
+    return "依頼を処理中";
+  }
+
+  if (eventType === "turn.completed" || eventType === "task_complete") {
+    return agentMessage ? "応答完了" : "完了";
+  }
+
+  return null;
+}
+
+function describeCodexActivity(
+  event: CodexEvent,
+  agentMessage: string | null,
+): string | null {
+  const eventType = typeof event.type === "string" ? event.type : null;
+  const commandState = getCommandExecutionState(event);
+
+  if (commandState?.status === "started") {
+    return `実行中: ${commandState.command}`;
+  }
+
+  if (commandState?.status === "completed") {
+    return `コマンド完了: ${commandState.command}`;
+  }
+
+  if (
+    eventType === "agent_message" ||
+    eventType === "agent_message_delta" ||
+    eventType === "agent_message_content_delta" ||
+    ((eventType === "item.started" || eventType === "item.completed") &&
+      getItemType(event) === "agent_message")
+  ) {
+    return agentMessage ? truncateSingleLine(agentMessage, 240) : "Codex が考えています";
+  }
+
+  if (eventType === "thread.started") {
+    return "Codex セッションを開始しました";
+  }
+
+  if (eventType === "turn.started") {
+    return "Codex が依頼を処理しています";
+  }
+
+  if (eventType === "turn.completed" || eventType === "task_complete") {
+    return agentMessage
+      ? truncateSingleLine(agentMessage, 240)
+      : "Codex が応答を返しました";
+  }
+
+  return null;
+}
+
+function describeCodexLogEvent(
+  event: CodexEvent,
+  agentMessage: string | null,
+): string | null {
+  const eventType = typeof event.type === "string" ? event.type : null;
+  const commandState = getCommandExecutionState(event);
+
+  if (eventType === "thread.started") {
+    return "セッションを開始";
+  }
+
+  if (eventType === "turn.started") {
+    return "依頼の処理を開始";
+  }
+
+  if (commandState?.status === "started") {
+    return `実行開始: ${commandState.command}`;
+  }
+
+  if (commandState?.status === "completed") {
+    return `実行完了(${commandState.exitCode ?? "?"}): ${commandState.command}`;
+  }
+
+  if (
+    eventType === "item.completed" &&
+    getItemType(event) === "agent_message" &&
+    agentMessage
+  ) {
+    return `考え: ${truncateSingleLine(agentMessage, 180)}`;
+  }
+
+  if (eventType === "task_complete" || eventType === "turn.completed") {
+    return agentMessage
+      ? `応答完了: ${truncateSingleLine(agentMessage, 180)}`
+      : "応答完了";
+  }
+
+  return null;
+}
+
+function getItemType(event: CodexEvent): string | null {
+  const item = event.item && typeof event.item === "object"
+    ? (event.item as Record<string, unknown>)
+    : null;
+  return typeof item?.type === "string" ? item.type : null;
+}
+
+function getCommandExecutionState(
+  event: CodexEvent,
+):
+  | {
+    status: "started" | "completed";
+    command: string;
+    exitCode?: number | null;
+  }
+  | null {
+  const eventType = typeof event.type === "string" ? event.type : null;
+  if (eventType !== "item.started" && eventType !== "item.completed") {
+    return null;
+  }
+
+  const item = event.item && typeof event.item === "object"
+    ? (event.item as Record<string, unknown>)
+    : null;
+  if (!item || item.type !== "command_execution") {
+    return null;
+  }
+
+  const rawCommand =
+    typeof item.command === "string" ? item.command : null;
+  if (!rawCommand) {
+    return null;
+  }
+
+  return {
+    status: eventType === "item.started" ? "started" : "completed",
+    command: normalizeCommand(rawCommand),
+    exitCode: typeof item.exit_code === "number" ? item.exit_code : null,
+  };
+}
+
+function normalizeCommand(command: string): string {
+  const trimmed = command.trim();
+  const shellMatch = trimmed.match(
+    /^(?:\/bin\/(?:zsh|bash)|zsh|bash)\s+-lc\s+(['"])([\s\S]*)\1$/,
+  );
+  const normalized = shellMatch?.[2] ?? trimmed;
+  return truncateSingleLine(normalized, 180);
+}
+
+function truncateSingleLine(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+async function resolvePreferredOriginUrl(
+  runner: Runner,
+  sourceRepo: string,
+): Promise<string | null> {
+  if (looksLikeRemoteUrl(sourceRepo)) {
+    return normalizeGithubRemoteUrl(sourceRepo);
+  }
+
+  const currentOrigin = await runner.run(
+    "git",
+    ["remote", "get-url", "origin"],
+    {
+      cwd: sourceRepo,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  if (currentOrigin.exitCode !== 0) {
+    return null;
+  }
+
+  const raw = currentOrigin.stdout.trim();
+  if (!raw || !looksLikeRemoteUrl(raw)) {
+    return null;
+  }
+
+  return normalizeGithubRemoteUrl(raw);
+}
+
+function looksLikeRemoteUrl(value: string): boolean {
+  return (
+    value.startsWith("git@") ||
+    value.startsWith("ssh://") ||
+    value.startsWith("https://") ||
+    value.startsWith("http://")
+  );
+}
+
+function normalizeGithubRemoteUrl(value: string): string {
+  const httpsMatch = value.match(
+    /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+  );
+  if (httpsMatch) {
+    return `git@github.com:${httpsMatch[1]}/${httpsMatch[2]}.git`;
+  }
+
+  const sshUrlMatch = value.match(
+    /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+  );
+  if (sshUrlMatch) {
+    return `git@github.com:${sshUrlMatch[1]}/${sshUrlMatch[2]}.git`;
+  }
+
+  return value;
 }
 
 function extractText(value: unknown): string | null {

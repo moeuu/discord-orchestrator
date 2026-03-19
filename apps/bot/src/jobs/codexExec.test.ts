@@ -5,9 +5,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildCodexProgress,
   buildCodexExecArgs,
   createCodexExecutor,
   extractAgentMessage,
+  renderCodexLogPreview,
   resolveWorkspaceDir,
 } from "./codexExec.js";
 import { createLocalRunner } from "./runner.js";
@@ -32,6 +34,9 @@ describe("codexExec", () => {
       "--full-auto",
       "hello",
     ]);
+    expect(
+      buildCodexExecArgs("hello again", { threadId: "thread-123" }),
+    ).toEqual(["exec", "resume", "thread-123", "--json", "hello again"]);
   });
 
   it("extracts the last agent message from full and delta events", () => {
@@ -57,6 +62,88 @@ describe("codexExec", () => {
         state,
       ),
     ).toBe("Finished");
+
+    expect(
+      extractAgentMessage(
+        {
+          type: "item.completed",
+          item: {
+            id: "item_9",
+            type: "agent_message",
+            text: "Final answer",
+          },
+        },
+        state,
+      ),
+    ).toBe("Final answer");
+  });
+
+  it("builds live codex progress from command and agent events", () => {
+    const started = buildCodexProgress(
+      undefined,
+      {
+        type: "item.started",
+        item: {
+          id: "item_1",
+          type: "command_execution",
+          command: "/bin/zsh -lc 'git status --short --branch'",
+        },
+      },
+      null,
+    );
+    const completed = buildCodexProgress(
+      started,
+      {
+        type: "item.completed",
+        item: {
+          id: "item_1",
+          type: "command_execution",
+          command: "/bin/zsh -lc 'git status --short --branch'",
+          exit_code: 0,
+        },
+      },
+      null,
+    );
+    const answered = buildCodexProgress(
+      completed,
+      {
+        type: "item.completed",
+        item: {
+          id: "item_2",
+          type: "agent_message",
+          text: "現在のブランチと差分を確認しました。",
+        },
+      },
+      "現在のブランチと差分を確認しました。",
+    );
+
+    expect(started.phase).toBe("コマンド実行中");
+    expect(started.activity).toContain("git status --short --branch");
+    expect(started.recent_logs?.at(-1)).toBe(
+      "実行開始: git status --short --branch",
+    );
+    expect(completed.active_command).toBeUndefined();
+    expect(completed.recent_logs?.at(-1)).toBe(
+      "実行完了(0): git status --short --branch",
+    );
+    expect(answered.latest_agent_message).toBe(
+      "現在のブランチと差分を確認しました。",
+    );
+    expect(answered.recent_logs?.at(-1)).toContain("考え:");
+  });
+
+  it("renders codex jsonl as a readable preview", () => {
+    const preview = renderCodexLogPreview([
+      "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'git status --short --branch'\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'git status --short --branch'\",\"exit_code\":0}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"確認しました。\"}}",
+    ].join("\n"));
+
+    expect(preview).toContain("セッションを開始");
+    expect(preview).toContain("実行開始: git status --short --branch");
+    expect(preview).toContain("考え: 確認しました。");
   });
 
   it("clones a workspace, runs codex exec, and persists jsonl output", async () => {
@@ -69,13 +156,14 @@ describe("codexExec", () => {
 
     await fs.mkdir(sourceRepo, { recursive: true });
     await runner.run("git", ["init", "--quiet", sourceRepo]);
+    await runner.run("git", ["-C", sourceRepo, "remote", "add", "origin", "https://github.com/moeuu/discord-orchestrator.git"]);
     await fs.writeFile(
       fakeCodex,
       [
         "#!/bin/sh",
-        "printf '%s\\n' '{\"type\":\"agent_message\",\"item_id\":\"m1\",\"message\":\"Planning\"}'",
-        "printf '%s\\n' '{\"type\":\"agent_message_delta\",\"item_id\":\"m1\",\"delta\":\" execution\"}'",
-        "printf '%s\\n' '{\"type\":\"task_complete\",\"last_agent_message\":\"Done\"}'",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Planning\"}}'",
+        "printf '%s\\n' '{\"type\":\"agent_message_delta\",\"item_id\":\"item_0\",\"delta\":\" execution\"}'",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"Done\"}}'",
       ].join("\n"),
       "utf8",
     );
@@ -113,13 +201,20 @@ describe("codexExec", () => {
     const workspaceDir = resolveWorkspaceDir(workspaceRoot, job.id);
     const logged = await fs.readFile(logPath, "utf8");
     const lines = logged.trim().split("\n");
+    const workspaceOrigin = await runner.run(
+      "git",
+      ["-C", workspaceDir, "remote", "get-url", "origin"],
+    );
 
     expect(observedPid).toBeGreaterThan(0);
     expect(result.status).toBe("succeeded");
     expect(result.summary).toBe("Done");
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain("\"type\":\"agent_message\"");
-    expect(lines[2]).toContain("\"last_agent_message\":\"Done\"");
+    expect(lines[0]).toContain("\"type\":\"item.completed\"");
+    expect(lines[2]).toContain("\"text\":\"Done\"");
+    expect(workspaceOrigin.stdout.trim()).toBe(
+      "git@github.com:moeuu/discord-orchestrator.git",
+    );
     expect(
       await fs.stat(path.join(workspaceDir, ".git")).then(() => true),
     ).toBe(true);

@@ -51,6 +51,15 @@ const configSchema = z.object({
     emptyToUndefined,
     z.string().min(1).optional(),
   ),
+  CHAT_LLM_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  CHAT_LLM_MODEL: z.string().min(1).default("gpt-5.4"),
+  LOG_STREAM_USE_THREADS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   DASHBOARD_PORT: z.coerce.number().int().positive().default(8787),
   DASHBOARD_BASE_URL: z
     .preprocess(emptyToUndefined, z.string().url().optional()),
@@ -117,6 +126,9 @@ export type AppConfig = {
   chatCommandsRequireMention: boolean;
   chatCommandsAllowedUserIds: string[];
   chatCommandsWorkdir: string;
+  chatLlmEnabled: boolean;
+  chatLlmModel: string;
+  logStreamUseThreads: boolean;
   dashboardPort: number;
   dashboardBaseUrl: string;
   autopilotBin: string;
@@ -165,6 +177,9 @@ export function loadConfig(): AppConfig {
       process.cwd(),
       parsed.CHAT_COMMANDS_WORKDIR ?? workspaceSourceRepo,
     ),
+    chatLlmEnabled: parsed.CHAT_LLM_ENABLED,
+    chatLlmModel: parsed.CHAT_LLM_MODEL,
+    logStreamUseThreads: parsed.LOG_STREAM_USE_THREADS,
     dashboardPort: parsed.DASHBOARD_PORT,
     dashboardBaseUrl:
       parsed.DASHBOARD_BASE_URL ??

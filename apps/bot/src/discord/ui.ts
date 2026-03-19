@@ -4,7 +4,7 @@ import { EmbedBuilder } from "discord.js";
 import type { JobRecord, JobStatus } from "../jobs/types.js";
 import type { Logger } from "../util/logger.js";
 
-const JOB_MESSAGE_DEBOUNCE_MS = 5_000;
+const JOB_MESSAGE_DEBOUNCE_MS = 2_000;
 
 type PendingJobMessageUpdate = {
   sending: boolean;
@@ -33,79 +33,107 @@ export function buildJobStatusReply(
 
 export function buildJobEmbed(job: JobRecord): EmbedBuilder {
   const progress = job.progress;
+  const detailLinks = [
+    job.discord_thread_id ? `<#${job.discord_thread_id}>` : null,
+    job.dashboard_url ? `[dashboard](${job.dashboard_url})` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+
   const embed = new EmbedBuilder()
-    .setTitle(`${capitalize(job.tool)} Job ${job.id}`)
+    .setTitle(`${toolLabel(job.tool)} ${statusLabel[job.status]}`)
     .setColor(statusColor[job.status])
+    .setDescription(truncate(job.summary ?? defaultSummary(job)))
     .addFields(
-      { name: "job_id", value: job.id, inline: false },
-      { name: "tool", value: job.tool, inline: true },
-      { name: "status", value: job.status, inline: true },
       {
-        name: "runner",
+        name: "状態",
+        value: `${statusEmoji[job.status]} ${statusLabel[job.status]}`,
+        inline: true,
+      },
+      {
+        name: "実行先",
         value: job.runner_id ?? job.target,
         inline: true,
       },
-      { name: "pid", value: job.pid ? String(job.pid) : "-", inline: true },
-      { name: "last_updated", value: job.updated_at, inline: false },
-      { name: "summary", value: truncate(job.summary ?? "-"), inline: false },
-      { name: "log_path", value: truncate(job.log_path ?? "-"), inline: false },
+      {
+        name: "更新",
+        value: formatDiscordTimestamp(job.updated_at),
+        inline: true,
+      },
+      {
+        name: "依頼",
+        value: formatRequest(job),
+        inline: false,
+      },
     );
 
-  if (job.dashboard_url) {
+  if (job.status !== "queued" || job.summary) {
     embed.addFields({
-      name: "dashboard",
-      value: truncate(job.dashboard_url),
+      name: job.status === "running" ? "最新状況" : "結果",
+      value: truncate(job.summary ?? "-"),
       inline: false,
     });
   }
 
-  if (job.external_id) {
+  if (detailLinks) {
     embed.addFields({
-      name: "external_session",
-      value: job.external_id,
+      name: "詳細",
+      value: detailLinks,
       inline: false,
     });
   }
 
   if (progress) {
-    embed.addFields(
-      { name: "phase", value: progress.phase ?? "-", inline: true },
-      {
-        name: "iter",
-        value:
-          typeof progress.current_iter === "number"
-            ? `${progress.current_iter}${typeof progress.max_iterations === "number" ? ` / ${progress.max_iterations}` : ""}`
-            : "-",
-        inline: true,
-      },
-      {
-        name: "best_metric",
-        value: progress.best_metric_name && progress.best_metric
-          ? `${progress.best_metric_name}: ${progress.best_metric}`
-          : progress.best_metric ?? "-",
-        inline: true,
-      },
-      {
-        name: "strategy",
-        value: truncate(
-          progress.strategy_summary ??
-            progress.latest_agent_message ??
-            "-",
-        ),
-        inline: false,
-      },
-    );
+    if (job.tool === "codex") {
+      embed.addFields(
+        { name: "フェーズ", value: progress.phase ?? "-", inline: true },
+        {
+          name: "今していること",
+          value: truncate(progress.activity ?? progress.latest_agent_message ?? "-"),
+          inline: false,
+        },
+        {
+          name: "直近ログ",
+          value: formatRecentLogs(progress.recent_logs),
+          inline: false,
+        },
+      );
+    } else {
+      embed.addFields(
+        { name: "フェーズ", value: progress.phase ?? "-", inline: true },
+        {
+          name: "iter",
+          value:
+            typeof progress.current_iter === "number"
+              ? `${progress.current_iter}${typeof progress.max_iterations === "number" ? ` / ${progress.max_iterations}` : ""}`
+              : "-",
+          inline: true,
+        },
+        {
+          name: "指標",
+          value: progress.best_metric_name && progress.best_metric
+            ? `${progress.best_metric_name}: ${progress.best_metric}`
+            : progress.best_metric ?? "-",
+          inline: true,
+        },
+        {
+          name: "方針",
+          value: truncate(
+            progress.strategy_summary ??
+              progress.latest_agent_message ??
+              "-",
+          ),
+          inline: false,
+        },
+      );
+    }
   }
 
-  if (job.discord_thread_id) {
-    embed.addFields({
-      name: "log_thread",
-      value: `<#${job.discord_thread_id}>`,
-      inline: false,
-    });
-  }
-
-  return embed.setTimestamp(new Date(job.updated_at));
+  return embed
+    .setFooter({
+      text: `job ${job.id}${job.pid ? ` · pid ${job.pid}` : ""}`,
+    })
+    .setTimestamp(new Date(job.updated_at));
 }
 
 export function createJobMessageUpdater(
@@ -208,6 +236,22 @@ const statusColor: Record<JobStatus, number> = {
   cancelled: 0xfee75c,
 };
 
+const statusEmoji: Record<JobStatus, string> = {
+  queued: "⏳",
+  running: "🟦",
+  succeeded: "✅",
+  failed: "❌",
+  cancelled: "🟨",
+};
+
+const statusLabel: Record<JobStatus, string> = {
+  queued: "待機中",
+  running: "実行中",
+  succeeded: "完了",
+  failed: "失敗",
+  cancelled: "停止",
+};
+
 function truncate(value: string): string {
   if (value.length <= 1000) {
     return value;
@@ -216,6 +260,61 @@ function truncate(value: string): string {
   return `${value.slice(0, 997)}...`;
 }
 
-function capitalize(value: string): string {
-  return value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
+function toolLabel(value: JobRecord["tool"]): string {
+  switch (value) {
+    case "codex":
+      return "Codex";
+    case "autopilot":
+      return "Autopilot";
+    case "shell":
+      return "Shell";
+  }
+}
+
+function formatRequest(job: JobRecord): string {
+  return truncate(
+    code(job.prompt || "-"),
+  );
+}
+
+function formatDiscordTimestamp(value: string): string {
+  const unix = Math.floor(new Date(value).getTime() / 1000);
+  if (!Number.isFinite(unix)) {
+    return value;
+  }
+
+  return `<t:${unix}:f>\n<t:${unix}:R>`;
+}
+
+function defaultSummary(job: JobRecord): string {
+  switch (job.status) {
+    case "queued":
+      return "ジョブをキューに追加しました。";
+    case "running":
+      return "処理を開始しました。";
+    case "succeeded":
+      return "処理が完了しました。";
+    case "failed":
+      return "処理が失敗しました。";
+    case "cancelled":
+      return "処理を停止しました。";
+  }
+}
+
+function code(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact ? `\`${compact.slice(0, 980)}\`` : "-";
+}
+
+function formatRecentLogs(value: string[] | undefined): string {
+  if (!value || value.length === 0) {
+    return "-";
+  }
+
+  return truncate(
+    value
+      .slice(-4)
+      .map((entry) => `• ${entry}`)
+      .join("\n"),
+  );
 }

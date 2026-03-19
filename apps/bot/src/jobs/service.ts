@@ -9,7 +9,9 @@ import {
   type AutopilotRunInput,
 } from "./autopilot.js";
 import {
+  buildCodexProgress,
   createCodexExecutor,
+  renderCodexLogPreview,
   type CodexExecConfig,
   type CodexEvent,
 } from "./codexExec.js";
@@ -37,6 +39,7 @@ type JobService = {
     prompt: string;
     target: RunnerTarget;
     discordChannelId: string;
+    externalId?: string;
   }): Promise<JobRecord>;
   startJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
   createShellJob(input: {
@@ -96,13 +99,14 @@ export function createJobService(
   const shellExecutor = createShellExecutor(shellConfig, logger);
 
   return {
-    async createJob({ prompt, target, discordChannelId }) {
+    async createJob({ prompt, target, discordChannelId, externalId }) {
       let job = await store.create({
         tool: "codex",
         prompt,
         target,
         status: "queued",
         discord_channel_id: discordChannelId,
+        external_id: externalId,
         summary: "Queued codex exec",
       });
 
@@ -402,11 +406,13 @@ export function createJobService(
 
       try {
         const contents = await fs.readFile(job.log_path, "utf8");
-        const preview = contents
-          .trim()
-          .split("\n")
-          .slice(-20)
-          .join("\n");
+        const preview = job.tool === "codex"
+          ? renderCodexLogPreview(contents, 8)
+          : contents
+            .trim()
+            .split("\n")
+            .slice(-20)
+            .join("\n");
 
         return {
           job,
@@ -483,10 +489,28 @@ async function handleCodexEvent(
   event: CodexEvent,
   agentMessage: string | null,
 ): Promise<JobRecord | null> {
-  const patch: Partial<JobRecord> = {};
+  const job = await store.get(jobId);
+  if (!job) {
+    return null;
+  }
 
-  if (agentMessage) {
+  const progress = buildCodexProgress(job.progress, event, agentMessage);
+  const patch: Partial<JobRecord> = {
+    progress,
+  };
+
+  if (progress.activity) {
+    patch.summary = progress.activity;
+  } else if (agentMessage) {
     patch.summary = agentMessage;
+  }
+
+  if (
+    typeof event.type === "string" &&
+    event.type === "thread.started" &&
+    typeof event.thread_id === "string"
+  ) {
+    patch.external_id = event.thread_id;
   }
 
   if (typeof event.type === "string" && event.type === "task_complete") {
@@ -497,12 +521,11 @@ async function handleCodexEvent(
     return null;
   }
 
-  const job = await store.get(jobId);
-  if (!job) {
-    return null;
-  }
-
-  if (patch.summary === job.summary) {
+  if (
+    patch.summary === job.summary &&
+    patch.external_id === job.external_id &&
+    JSON.stringify(patch.progress ?? null) === JSON.stringify(job.progress ?? null)
+  ) {
     return null;
   }
 

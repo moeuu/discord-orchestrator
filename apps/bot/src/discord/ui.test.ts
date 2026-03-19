@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JobRecord } from "../jobs/types.js";
-import { createJobMessageUpdater } from "./ui.js";
+import { buildJobEmbed, createJobMessageUpdater } from "./ui.js";
 
 function createJob(partial: Partial<JobRecord> = {}): JobRecord {
   return {
@@ -24,7 +24,7 @@ describe("createJobMessageUpdater", () => {
     vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
   });
 
-  it("debounces repeated job message updates to one edit per 5 seconds", async () => {
+  it("debounces repeated job message updates to one edit per 2 seconds", async () => {
     const edit = vi.fn().mockResolvedValue(undefined);
     const fetchMessage = vi.fn().mockResolvedValue({ edit });
     const fetchChannel = vi.fn().mockResolvedValue({
@@ -58,7 +58,7 @@ describe("createJobMessageUpdater", () => {
       createJob({ updated_at: "2026-03-15T00:00:02.000Z", status: "succeeded" }),
     );
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(1_999);
     expect(edit).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -67,5 +67,51 @@ describe("createJobMessageUpdater", () => {
     expect(fetchChannel).toHaveBeenCalledTimes(2);
     expect(fetchMessage).toHaveBeenCalledTimes(2);
     expect(edit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("buildJobEmbed", () => {
+  it("builds a user-facing embed without raw log path fields", () => {
+    const embed = buildJobEmbed(
+      createJob({
+        tool: "shell",
+        status: "succeeded",
+        summary: "/Users/moritaeiji/agent/discord-orchestrator",
+        runner_id: "local",
+        discord_thread_id: "thread-1",
+        dashboard_url: "http://127.0.0.1:8787/jobs/job-1",
+      }),
+    ).toJSON();
+
+    expect(embed.title).toBe("Shell 完了");
+    expect(embed.description).toBe("/Users/moritaeiji/agent/discord-orchestrator");
+    expect(embed.fields?.some((field) => field.name === "詳細")).toBe(true);
+    expect(embed.fields?.some((field) => field.name === "log_path")).toBe(false);
+    expect(embed.footer?.text).toContain("job job-1");
+  });
+
+  it("shows live codex progress in the main embed instead of raw log paths", () => {
+    const embed = buildJobEmbed(
+      createJob({
+        tool: "codex",
+        status: "running",
+        summary: "実行中: git status --short --branch",
+        progress: {
+          phase: "コマンド実行中",
+          activity: "実行中: git status --short --branch",
+          latest_agent_message: "差分の確認に必要なコマンドを実行します。",
+          recent_logs: [
+            "セッションを開始",
+            "依頼の処理を開始",
+            "実行開始: git status --short --branch",
+          ],
+        },
+      }),
+    ).toJSON();
+
+    expect(embed.fields?.some((field) => field.name === "今していること")).toBe(true);
+    expect(embed.fields?.some((field) => field.name === "直近ログ")).toBe(true);
+    expect(embed.fields?.some((field) => field.value?.includes("git status --short --branch"))).toBe(true);
+    expect(embed.fields?.some((field) => field.name === "log_path")).toBe(false);
   });
 });
