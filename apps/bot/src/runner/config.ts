@@ -1,10 +1,9 @@
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-import dotenv from "dotenv";
 import { z } from "zod";
 
-dotenv.config();
+import { createRunnerRuntime, loadRunnerEnv } from "./runtime.js";
 
 function emptyToUndefined(value: unknown): unknown {
   return value === "" ? undefined : value;
@@ -47,7 +46,11 @@ export type RunnerConfig = {
   runnerApiToken?: string;
   runnerHeartbeatIntervalMs: number;
   runnerRetryDelayMs: number;
+  runnerEnvFile?: string;
+  nodeBin: string;
+  gitBin: string;
   codexBin: string;
+  childEnv: NodeJS.ProcessEnv;
   workspaceRoot: string;
   workspaceSourceRepo: string;
   codexFullAuto: boolean;
@@ -56,8 +59,15 @@ export type RunnerConfig = {
 };
 
 export function loadRunnerConfig(): RunnerConfig {
+  const runnerEnvFile = loadRunnerEnv(process.cwd(), process.env);
   const parsed = runnerConfigSchema.parse(process.env);
   const repoRoot = detectGitRepoRoot(process.cwd());
+  const runtime = createRunnerRuntime({
+    cwd: process.cwd(),
+    env: process.env,
+    envFile: runnerEnvFile,
+    codexBin: parsed.CODEX_BIN,
+  });
 
   return {
     runnerId: parsed.RUNNER_ID,
@@ -65,7 +75,11 @@ export function loadRunnerConfig(): RunnerConfig {
     runnerApiToken: parsed.RUNNER_API_TOKEN,
     runnerHeartbeatIntervalMs: parsed.RUNNER_HEARTBEAT_INTERVAL_MS,
     runnerRetryDelayMs: parsed.RUNNER_RETRY_DELAY_MS,
-    codexBin: parsed.CODEX_BIN,
+    runnerEnvFile,
+    nodeBin: runtime.nodeBin,
+    gitBin: runtime.gitBin,
+    codexBin: runtime.codexBin,
+    childEnv: runtime.childEnv,
     workspaceRoot: parsed.WORKSPACE_ROOT
       ? resolveLocalPath(process.cwd(), parsed.WORKSPACE_ROOT)
       : resolveLocalPath(process.cwd(), "../../data/workspaces"),

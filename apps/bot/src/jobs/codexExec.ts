@@ -12,6 +12,7 @@ export type CodexExecSandboxMode =
 
 export type CodexExecConfig = {
   codexBin: string;
+  gitBin: string;
   workspaceRoot: string;
   sourceRepo: string;
   fullAuto?: boolean;
@@ -47,7 +48,12 @@ export function createCodexExecutor(
       const workspaceDir = resolveWorkspaceDir(config.workspaceRoot, job.id);
       const logPath = job.log_path ?? path.join(path.dirname(config.workspaceRoot), "logs", `job-${job.id}.jsonl`);
 
-      await prepareWorkspace(runner, config.sourceRepo, workspaceDir);
+      await prepareWorkspace(
+        runner,
+        config.gitBin,
+        config.sourceRepo,
+        workspaceDir,
+      );
       await fs.mkdir(path.dirname(logPath), { recursive: true });
 
       const args = buildCodexExecArgs(job.prompt, {
@@ -230,6 +236,7 @@ export function resolveWorkspaceDir(workspaceRoot: string, jobId: string): strin
 
 export async function prepareWorkspace(
   runner: Runner,
+  gitBin: string,
   sourceRepo: string,
   workspaceDir: string,
 ): Promise<void> {
@@ -237,7 +244,7 @@ export async function prepareWorkspace(
   await fs.mkdir(path.dirname(workspaceDir), { recursive: true });
 
   const clone = await runner.run(
-    "git",
+    gitBin,
     ["clone", "--quiet", sourceRepo, workspaceDir],
     {
       stdio: ["ignore", "pipe", "pipe"],
@@ -248,10 +255,14 @@ export async function prepareWorkspace(
     throw new Error(clone.stderr.trim() || "git clone failed");
   }
 
-  const preferredOrigin = await resolvePreferredOriginUrl(runner, sourceRepo);
+  const preferredOrigin = await resolvePreferredOriginUrl(
+    runner,
+    gitBin,
+    sourceRepo,
+  );
   if (preferredOrigin) {
     const setRemote = await runner.run(
-      "git",
+      gitBin,
       ["remote", "set-url", "origin", preferredOrigin],
       {
         cwd: workspaceDir,
@@ -621,6 +632,7 @@ function truncateSingleLine(value: string, maxLength: number): string {
 
 async function resolvePreferredOriginUrl(
   runner: Runner,
+  gitBin: string,
   sourceRepo: string,
 ): Promise<string | null> {
   if (looksLikeRemoteUrl(sourceRepo)) {
@@ -628,7 +640,7 @@ async function resolvePreferredOriginUrl(
   }
 
   const currentOrigin = await runner.run(
-    "git",
+    gitBin,
     ["remote", "get-url", "origin"],
     {
       cwd: sourceRepo,

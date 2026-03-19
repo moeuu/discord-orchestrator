@@ -172,6 +172,7 @@ describe("codexExec", () => {
     const executor = createCodexExecutor(
       {
         codexBin: fakeCodex,
+        gitBin: "git",
         workspaceRoot,
         sourceRepo,
       },

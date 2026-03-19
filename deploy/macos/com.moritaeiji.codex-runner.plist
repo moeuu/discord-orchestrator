@@ -20,6 +20,14 @@
   <key>WorkingDirectory</key>
   <string>/Users/moritaeiji/agent/discord-orchestrator/apps/bot</string>
 
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RUNNER_ENV_FILE</key>
+    <string>/Users/moritaeiji/agent/discord-orchestrator/apps/bot/.runner.env</string>
+    <key>RUNNER_NODE_BIN</key>
+    <string>/Users/moritaeiji/.nvm/versions/node/v25.2.1/bin/node</string>
+  </dict>
+
   <key>StandardOutPath</key>
   <string>/Users/moritaeiji/.discord-orchestrator/logs/macbook-runner.stdout.log</string>
 

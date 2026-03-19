@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+
 import { createCodexExecutor } from "../jobs/codexExec.js";
+import { createLocalRunner } from "../jobs/runner.js";
 import type { JobRecord, JobResult } from "../jobs/types.js";
 import { createLogger } from "../util/logger.js";
 import { loadRunnerConfig } from "./config.js";
@@ -14,15 +17,19 @@ type RunnerEventResponse = {
 async function main(): Promise<void> {
   const config = loadRunnerConfig();
   const logger = createLogger(config.logLevel);
+  await validateRunnerStartup(config);
+  const runner = createLocalRunner({ env: config.childEnv });
   const executor = createCodexExecutor(
     {
       codexBin: config.codexBin,
+      gitBin: config.gitBin,
       workspaceRoot: config.workspaceRoot,
       sourceRepo: config.workspaceSourceRepo,
       fullAuto: config.codexFullAuto,
       sandbox: config.codexSandbox,
     },
     logger,
+    runner,
   );
 
   let stopped = false;
@@ -36,6 +43,12 @@ async function main(): Promise<void> {
   logger.info("Runner started", {
     runnerId: config.runnerId,
     apiBaseUrl: config.runnerApiBaseUrl,
+    envFile: config.runnerEnvFile ?? null,
+    nodeBin: config.nodeBin,
+    codexBin: config.codexBin,
+    gitBin: config.gitBin,
+    workspaceRoot: config.workspaceRoot,
+    sourceRepo: config.workspaceSourceRepo,
   });
 
   while (!stopped) {
@@ -55,6 +68,12 @@ async function main(): Promise<void> {
       await delay(config.runnerRetryDelayMs);
     }
   }
+}
+
+async function validateRunnerStartup(
+  config: ReturnType<typeof loadRunnerConfig>,
+): Promise<void> {
+  await fs.mkdir(config.workspaceRoot, { recursive: true });
 }
 
 async function pollNextJob(config: ReturnType<typeof loadRunnerConfig>): Promise<JobRecord | null> {

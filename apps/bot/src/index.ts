@@ -19,6 +19,7 @@ async function main(): Promise<void> {
     logger,
     {
       codexBin: config.codexBin,
+      gitBin: "git",
       workspaceRoot: config.workspaceRoot,
       sourceRepo: config.workspaceSourceRepo,
       fullAuto: config.codexFullAuto,

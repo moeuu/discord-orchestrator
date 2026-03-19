@@ -7,38 +7,46 @@ export type RunResult = {
   stderr: string;
 };
 
+type RunnerDefaults = {
+  env?: NodeJS.ProcessEnv;
+};
+
 export type Runner = {
   spawn(command: string, args: string[], options?: SpawnOptions): ChildProcess;
   run(command: string, args: string[], options?: SpawnOptions): Promise<RunResult>;
 };
 
-export function createLocalRunner(): Runner {
+export function createLocalRunner(defaults: RunnerDefaults = {}): Runner {
   return {
     spawn(command, args, options) {
-      return options ? spawn(command, args, options) : spawn(command, args);
+      const spawnOptions = withDefaultEnv(defaults.env, options);
+      return spawnOptions
+        ? spawn(command, args, spawnOptions)
+        : spawn(command, args);
     },
     async run(command, args, options) {
       return await new Promise<RunResult>((resolve, reject) => {
-        const child = options
-          ? spawn(command, args, options)
+        const spawnOptions = withDefaultEnv(defaults.env, options);
+        const child = spawnOptions
+          ? spawn(command, args, spawnOptions)
           : spawn(command, args);
 
         let stdout = "";
         let stderr = "";
 
-        child.stdout?.on("data", (chunk) => {
+        child.stdout?.on("data", (chunk: Buffer | string) => {
           stdout += chunk.toString();
         });
 
-        child.stderr?.on("data", (chunk) => {
+        child.stderr?.on("data", (chunk: Buffer | string) => {
           stderr += chunk.toString();
         });
 
-        child.once("error", (error) => {
+        child.once("error", (error: Error) => {
           reject(error);
         });
 
-        child.once("close", (exitCode) => {
+        child.once("close", (exitCode: number | null) => {
           resolve({
             exitCode: exitCode ?? 1,
             stdout,
@@ -46,6 +54,23 @@ export function createLocalRunner(): Runner {
           });
         });
       });
+    },
+  };
+}
+
+function withDefaultEnv(
+  defaultEnv: NodeJS.ProcessEnv | undefined,
+  options?: SpawnOptions,
+): SpawnOptions | undefined {
+  if (!defaultEnv) {
+    return options;
+  }
+
+  return {
+    ...(options ?? {}),
+    env: {
+      ...defaultEnv,
+      ...(options?.env ?? {}),
     },
   };
 }

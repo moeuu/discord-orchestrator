@@ -49,7 +49,7 @@ RAILWAY_PUBLIC_DOMAIN=
 
 ## Runner セットアップ
 
-MacBook など実行マシン側では `apps/bot/.runner.env` を作り、`npm run runner` を起動します。
+MacBook など実行マシン側では `apps/bot/.runner.env` を作り、`npm run runner` を起動します。runner は bot 用 `.env` を読まず、`.runner.env` だけを読みます。
 
 ```env
 RUNNER_ID=macbook
@@ -65,6 +65,8 @@ CODEX_SANDBOX=
 LOG_LEVEL=info
 ```
 
+`CODEX_BIN=codex` のままで構いません。runner は自身を起動している Node の directory を child process の `PATH` 先頭に足してから `codex` を解決するので、`launchd` や `systemd` の薄い環境でも `#!/usr/bin/env node` な CLI を起動できます。
+
 起動確認:
 
 ```sh
@@ -79,7 +81,7 @@ npm run runner
 - `scripts/run-macbook-runner.sh`
 - `deploy/macos/com.moritaeiji.codex-runner.plist`
 
-インストール後は次で自動起動できます。
+LaunchAgent は `RUNNER_ENV_FILE` と `RUNNER_NODE_BIN` を明示し、shell init なしで起動します。インストール後は次で自動起動できます。
 
 ```sh
 mkdir -p ~/.discord-orchestrator/logs

@@ -22,6 +22,7 @@ describe("createJobService", () => {
     const store = createJobStore(dataDir);
     const service = createJobService(store, logDir, noopLogger, {
       codexBin: "codex",
+      gitBin: "git",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: tempRoot,
     }, {
@@ -51,6 +52,7 @@ describe("createJobService", () => {
     const store = createJobStore(dataDir);
     const service = createJobService(store, logDir, noopLogger, {
       codexBin: "codex",
+      gitBin: "git",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: tempRoot,
     }, {
@@ -77,6 +79,7 @@ describe("createJobService", () => {
     const store = createJobStore(dataDir);
     const service = createJobService(store, logDir, noopLogger, {
       codexBin: "codex",
+      gitBin: "git",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: "git@github.com:moeuu/discord-orchestrator.git",
     }, {
@@ -104,6 +107,7 @@ describe("createJobService", () => {
     const store = createJobStore(dataDir);
     const service = createJobService(store, logDir, noopLogger, {
       codexBin: "codex",
+      gitBin: "git",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: tempRoot,
     }, {
@@ -145,6 +149,7 @@ describe("createJobService", () => {
     const store = createJobStore(dataDir);
     const service = createJobService(store, logDir, noopLogger, {
       codexBin: "codex",
+      gitBin: "git",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: tempRoot,
     }, {
