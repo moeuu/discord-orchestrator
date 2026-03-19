@@ -5,7 +5,7 @@ targets:
   - id: macbook
     displayName: MacBook
     transport: bridge
-    bridgeBaseUrl: http://codex-bridge.railway.internal
+    bridgeBaseUrl: https://codex-bridge-production.up.railway.app
     sshHost: moeu-macbook.tail19b101.ts.net
     sshUser: moritaeiji
     workspaceRoot: /Users/moritaeiji/.discord-orchestrator/workspaces
