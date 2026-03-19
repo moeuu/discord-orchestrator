@@ -12,6 +12,7 @@ type DashboardService = {
 
 export function startDashboardServer(
   port: number,
+  host: string,
   service: DashboardService,
   logger: Logger,
 ): http.Server {
@@ -47,8 +48,8 @@ export function startDashboardServer(
     }
   });
 
-  server.listen(port, () => {
-    logger.info(`Dashboard listening on http://127.0.0.1:${port}`);
+  server.listen(port, host, () => {
+    logger.info(`Dashboard listening on http://${host}:${port}`);
   });
 
   return server;

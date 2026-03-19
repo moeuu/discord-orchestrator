@@ -12,9 +12,11 @@ import { extractChatShellCommand } from "./chatCommands.js";
 import { createChatLlmRouter } from "./chatLlmRouter.js";
 import { createChatSessionStore } from "./chatSessionStore.js";
 import { shouldResetChatSession } from "./chatLlmRouter.js";
+import { extractMentionCodexRequest } from "./codexMention.js";
 import type { JobStore } from "../jobs/store.js";
 import type { Logger } from "../util/logger.js";
 import type { JobRecord, RunnerTarget } from "../jobs/types.js";
+import type { CodexTarget } from "../targets.js";
 import {
   buildJobEmbed,
   buildJobStatusReply,
@@ -32,6 +34,7 @@ export function attachInteractionHandlers(
   logger: Logger,
   store: JobStore,
   jobs: JobService,
+  targets: CodexTarget[],
 ): void {
   const jobMessages = createJobMessageUpdater(client, logger);
   const logStreamer = createJobLogStreamer(client, store, logger, {
@@ -152,6 +155,29 @@ export function attachInteractionHandlers(
       botRoleIds,
     );
     try {
+      const directCodexRequest = extractMentionCodexRequest(
+        message.content,
+        targets,
+        config.codexDefaultTarget,
+        client.user?.id,
+        botRoleIds,
+      );
+      if (directCodexRequest) {
+        await launchCodexJob(
+          directCodexRequest.prompt,
+          "",
+          directCodexRequest.targetId,
+          message.channelId,
+          message.channelId,
+          message,
+          store,
+          jobs,
+          jobMessages.updateJobMessage,
+          chatSessions,
+        );
+        return;
+      }
+
       if (config.chatLlmEnabled) {
         if (!chatLlmRouter) {
           await message.reply("Chat LLM router を初期化できませんでした。");
@@ -201,6 +227,7 @@ export function attachInteractionHandlers(
             await launchCodexJob(
               action.codex_prompt,
               action.message,
+              config.codexDefaultTarget,
               message.channelId,
               message.channelId,
               message,
@@ -268,6 +295,7 @@ async function launchShellJob(
 async function launchCodexJob(
   prompt: string,
   prefixMessage: string,
+  targetId: string,
   discordChannelId: string,
   sessionKey: string,
   message: {
@@ -279,9 +307,11 @@ async function launchCodexJob(
   chatSessions: ReturnType<typeof createChatSessionStore>,
 ): Promise<void> {
   const session = await chatSessions.get(sessionKey);
+  const { target, runnerId } = resolveCodexLaunchTarget(targetId);
   let job = await jobs.createJob({
     prompt,
-    target: "local",
+    target,
+    runnerId,
     discordChannelId,
     externalId: session?.threadId,
   });
@@ -314,7 +344,13 @@ async function handleSlashCommand(
     case "ping":
       return { content: "pong" };
     case "codex":
-      return await handleCodexCommand(interaction, store, jobs, updateJobMessage);
+      return await handleCodexCommand(
+        interaction,
+        config,
+        store,
+        jobs,
+        updateJobMessage,
+      );
     case "autopilot":
       return await handleAutopilotCommand(
         interaction,
@@ -334,6 +370,7 @@ async function handleSlashCommand(
 
 async function handleCodexCommand(
   interaction: ChatInputCommandInteraction,
+  config: AppConfig,
   store: JobStore,
   jobs: JobService,
   updateJobMessage: UpdateJobMessage,
@@ -347,7 +384,13 @@ async function handleCodexCommand(
       return buildJobStatusReply(job);
     }
     case "run":
-      await handleCodexRun(interaction, store, jobs, updateJobMessage);
+      await handleCodexRun(
+        interaction,
+        config,
+        store,
+        jobs,
+        updateJobMessage,
+      );
       return null;
     case "logs":
       return await handleLogs(interaction, jobs);
@@ -395,17 +438,24 @@ async function handleAutopilotCommand(
 
 async function handleCodexRun(
   interaction: ChatInputCommandInteraction,
+  config: AppConfig,
   store: JobStore,
   jobs: JobService,
   updateJobMessage: UpdateJobMessage,
 ): Promise<void> {
   const prompt = interaction.options.getString("prompt", true);
-  const target = (interaction.options.getString("target") ?? "local") as RunnerTarget;
+  const requestedTarget = interaction.options.getString("target") ?? config.codexDefaultTarget;
+  const { target, runnerId } = resolveCodexLaunchTarget(requestedTarget);
   const discordChannelId = interaction.channelId ?? "unknown";
 
   await interaction.deferReply();
 
-  let job = await jobs.createJob({ prompt, target, discordChannelId });
+  let job = await jobs.createJob({
+    prompt,
+    target,
+    runnerId,
+    discordChannelId,
+  });
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
 
   const reply = await interaction.fetchReply();
@@ -518,4 +568,19 @@ function truncateLog(value: string): string {
   }
 
   return `${value.slice(-1800)}`;
+}
+
+function resolveCodexLaunchTarget(value: string): {
+  target: RunnerTarget;
+  runnerId?: string;
+} {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "local") {
+    return { target: "local" };
+  }
+
+  return {
+    target: "ssh",
+    runnerId: normalized,
+  };
 }

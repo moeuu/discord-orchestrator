@@ -55,36 +55,58 @@ npm run dev
 DISCORD_TOKEN=...
 DISCORD_APP_ID=...
 DISCORD_GUILD_ID=...
-WORKSPACE_ROOT=../../data/workspaces
-WORKSPACE_SOURCE_REPO=/absolute/path/to/source/repo
+TARGETS_CONFIG_PATH=../../config/targets.yaml
+CODEX_DEFAULT_TARGET=macbook
+RUNNER_BRIDGE_AUTH_TOKEN=...
+STORAGE_ROOT=
+WORKSPACE_ROOT=
+WORKSPACE_SOURCE_REPO=git@github.com:owner/repo.git
 CHAT_COMMANDS_ENABLED=false
 CHAT_COMMANDS_REQUIRE_MENTION=true
 CHAT_COMMANDS_ALLOWED_USER_IDS=
-CHAT_COMMANDS_WORKDIR=/absolute/path/to/workdir
+CHAT_COMMANDS_WORKDIR=
 CHAT_LLM_ENABLED=false
 CHAT_LLM_MODEL=gpt-5.4
 LOG_STREAM_USE_THREADS=false
-AUTOPILOT_WORKDIR=/absolute/path/to/kaggle-autopilot
-AUTOPILOT_ARTIFACTS_DIR=/absolute/path/to/kaggle-autopilot/artifacts
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=
+DASHBOARD_BASE_URL=
+RAILWAY_PUBLIC_DOMAIN=
+BRIDGE_BIND_HOST=0.0.0.0
+BRIDGE_PORT=
+AUTOPILOT_WORKDIR=
+AUTOPILOT_ARTIFACTS_DIR=
 AUTOPILOT_REMOTE_WATCH_ENABLED=true
 AUTOPILOT_REMOTE_WATCH_HOST=lab_rdp
 AUTOPILOT_REMOTE_WATCH_RUNNER_ID=lab_rdp
 AUTOPILOT_REMOTE_WATCH_CHANNEL_ID=<discord channel id>
 ```
 
-`WORKSPACE_SOURCE_REPO` を省略した場合は、bot 起動時の Git リポジトリルートを clone 元として使います。`CODEX_FULL_AUTO=false` と `CODEX_SANDBOX=` がデフォルトで、必要なときだけ `--full-auto` または `--sandbox` を環境変数経由で有効化できます。
+複数マシンへ Codex を投げるときは `WORKSPACE_SOURCE_REPO` に clone 可能な Git URL を入れてください。remote runner はこの URL を使って各実行先に `git clone` します。ローカルだけで動かす場合は省略可能で、bot を起動している checkout 自体を clone 元として使います。`CHAT_COMMANDS_WORKDIR` も未指定なら現在の checkout を使います。
+
+永続化先は `STORAGE_ROOT` を 1 つ設定すればまとまります。たとえば Railway volume を `/data` に mount して `STORAGE_ROOT=/data` を入れると、workspace は `/data/workspaces`、job store は `/data/data`、ログは `/data/logs` に出ます。既存の `WORKSPACE_ROOT` `JOB_DATA_DIR` `LOG_DIR` を個別に指定したい場合はそのまま使えます。
+
+`CODEX_FULL_AUTO=false` と `CODEX_SANDBOX=` がデフォルトで、必要なときだけ `--full-auto` または `--sandbox` を環境変数経由で有効化できます。
+
+Discord から Codex を remote 実行したい場合は `config/targets.yaml` を用意し、`macbook` のような論理 target を定義します。例は [config/targets.example.yaml](config/targets.example.yaml) を参照してください。
+
+bot は `/codex run target:macbook prompt:...` と `@codex-bot macbook: ...` の両方で target を選べます。`CODEX_DEFAULT_TARGET` を設定しておけば、`@mention` で target を省略した場合もその runner に送ります。
 
 Discord チャットから shell コマンドを直接起動したい場合は `CHAT_COMMANDS_ENABLED=true` を設定してください。デフォルトでは bot mention 必須で、メッセージ中の fenced code block / backtick / `「...」っていうコマンドを実行して` からコマンド文字列を抽出して実行します。安全のため `CHAT_COMMANDS_ALLOWED_USER_IDS=123,456` のように allowlist も併用してください。
 
 この機能を使うときは Discord Developer Portal の Bot 設定で `Message Content Intent` も有効化してください。未設定のまま `CHAT_COMMANDS_ENABLED=true` で起動すると、bot は `Used disallowed intents` で接続できません。
 
-`@codex-bot` の通常メッセージを LLM に渡したい場合は `CHAT_LLM_ENABLED=true` を設定してください。bot はローカルの `codex exec` にメッセージを送り、`reply / shell / codex` のいずれかを JSON で返させて処理します。現行のデフォルト model は `gpt-5.4` です。
+`@codex-bot` の通常メッセージを LLM に渡したい場合は `CHAT_LLM_ENABLED=true` を設定してください。bot は `codex exec` にメッセージを送り、`reply / shell / codex` のいずれかを JSON で返させて処理します。現行のデフォルト model は `gpt-5.4` です。
 
 この `@mention` 会話は channel ごとに Codex session を継続します。`action=codex` に分岐した実作業も同じ session を引き継ぐので、直後の follow-up では前の作業内容を前提に質問できます。明示的に `新しいセッション`、`セッションをリセット`、`会話をリセット` のように書いたときだけ、新しい session でやり直します。
 
 ログを毎回 thread に分けたくない場合は `LOG_STREAM_USE_THREADS=false` のまま使ってください。これが既定です。`true` にするとログ専用 thread を作ります。
 
-Autopilot の進捗ダッシュボードは `DASHBOARD_PORT` と `DASHBOARD_BASE_URL` で設定します。デフォルトでは `http://127.0.0.1:8787` に立ち上がり、`/jobs/<job-id>` で iter ごとの戦略、metrics、ログ末尾を確認できます。
+Autopilot の進捗ダッシュボードは `DASHBOARD_HOST` `DASHBOARD_PORT` `DASHBOARD_BASE_URL` で設定します。`DASHBOARD_PORT` 未指定時は `PORT` を優先し、さらに未指定なら `8787` を使います。`DASHBOARD_BASE_URL` 未指定時は、Railway では `RAILWAY_PUBLIC_DOMAIN` から `https://...` を自動組み立て、それ以外では `http://127.0.0.1:<port>` を使います。
+
+Railway に載せる場合は、bot service とは別に `npm run start:bridge` を使う bridge service を 1 つ追加し、bridge service 側でも同じ `TARGETS_CONFIG_PATH` と `RUNNER_BRIDGE_AUTH_TOKEN` を設定してください。公開 dashboard が必要なら service domain を有効化し、必要なら `DASHBOARD_BASE_URL` を明示してください。HTTP server 自体は `0.0.0.0:$PORT` で待ち受けるようにしてあります。
+
+MacBook 側は Tailscale 参加済み、`codex` ログイン済み、`git clone` できる状態を前提にします。bridge service は Tailscale 上の `sshHost` / `sshUser` へ SSH して `codex exec --json` を起動します。
 
 研究室 Ubuntu で手動に `uv run kagglebot autopilot ...` を打った run も Discord に流したい場合は、bot 側で `AUTOPILOT_REMOTE_WATCH_*` を設定し、研究室マシンの shell で `source /path/to/discord-orchestrator/scripts/autopilot-shell-hook.sh` を読み込んでください。以後は同じ `uv run kagglebot autopilot ...` を打つだけで `~/.discord-orchestrator/autopilot-sessions/` に session manifest と console log が残り、bot が `ssh lab_rdp` 経由で自動検出して Discord embed とログ thread を作成します。
 
@@ -100,7 +122,8 @@ bot 起動後、開発用 Guild で以下を確認します。
 
 - `/ping` が `pong` を返す
 - `/codex status` がジョブ未作成時メッセージまたは最新ジョブを返す
-- `/codex run` が `data/workspaces/job-<id>/` に clone した作業ツリー上で `codex exec --json` を実行する
+- `/codex run target:macbook` が bridge service 経由で MacBook 上の `codex exec --json` を実行する
+- `@codex-bot macbook: README を直して` が同じ codex job 経路に入る
 - `/autopilot run` が `AUTOPILOT_WORKDIR` で `uv run kagglebot autopilot ...` を実行し、Discord embed とダッシュボードを自動更新する
 - 研究室 Ubuntu の manual run は shell hook + `AUTOPILOT_REMOTE_WATCH_ENABLED=true` で自動検出し、Discord に同じ UI で流す
 
@@ -123,7 +146,7 @@ bot 起動後、開発用 Guild で以下を確認します。
 
 - `/ping`
 - `/codex status`
-- `/codex run` は local runner で `codex exec --json` を実行
+- `/codex run` は local または remote runner で `codex exec --json` を実行
 - `/autopilot run` は artifacts から iter/strategy を抽出して進捗更新
 - 進捗は同一メッセージを編集して更新
 

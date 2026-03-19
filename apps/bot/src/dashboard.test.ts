@@ -50,7 +50,7 @@ describe("dashboard", () => {
       },
     };
 
-    const server = startDashboardServer(0, service, noopLogger);
+    const server = startDashboardServer(0, "127.0.0.1", service, noopLogger);
     servers.push(server);
     await new Promise<void>((resolve) => server.on("listening", () => resolve()));
 

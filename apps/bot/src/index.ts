@@ -5,11 +5,13 @@ import { startDashboardServer } from "./dashboard.js";
 import { attachInteractionHandlers } from "./discord/handlers.js";
 import { createJobService } from "./jobs/service.js";
 import { createJobStore } from "./jobs/store.js";
+import { loadCodexTargets } from "./targets.js";
 import { createLogger } from "./util/logger.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config.logLevel);
+  const targets = loadCodexTargets(config.targetsConfigPath);
   const store = createJobStore(config.jobDataDir);
   const jobs = createJobService(
     store,
@@ -21,6 +23,8 @@ async function main(): Promise<void> {
       sourceRepo: config.workspaceSourceRepo,
       fullAuto: config.codexFullAuto,
       sandbox: config.codexSandbox,
+      bridgeAuthToken: config.runnerBridgeAuthToken,
+      targets,
     },
     {
       autopilotBin: config.autopilotBin,
@@ -44,8 +48,13 @@ async function main(): Promise<void> {
 
   const client = new Client({ intents });
 
-  attachInteractionHandlers(client, config, logger, store, jobs);
-  startDashboardServer(config.dashboardPort, jobs, logger);
+  attachInteractionHandlers(client, config, logger, store, jobs, targets);
+  startDashboardServer(
+    config.dashboardPort,
+    config.dashboardHost,
+    jobs,
+    logger,
+  );
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(`Bot ready as ${readyClient.user.tag}`);

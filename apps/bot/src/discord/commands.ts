@@ -22,8 +22,8 @@ export const commandDefinitions = [
             .setName("target")
             .setDescription("実行ターゲット")
             .addChoices(
+              { name: "macbook", value: "macbook" },
               { name: "local", value: "local" },
-              { name: "ssh", value: "ssh" },
             ),
         ),
     )

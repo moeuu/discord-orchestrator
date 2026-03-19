@@ -70,6 +70,46 @@ describe("createJobService", () => {
     expect(job.external_id).toBe("thread-123");
   });
 
+  it("stores runner_id for remote codex jobs", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
+    const dataDir = path.join(tempRoot, "data");
+    const logDir = path.join(tempRoot, "logs");
+    const store = createJobStore(dataDir);
+    const service = createJobService(store, logDir, noopLogger, {
+      codexBin: "codex",
+      workspaceRoot: path.join(tempRoot, "workspaces"),
+      sourceRepo: "git@github.com:moeuu/discord-orchestrator.git",
+      targets: [
+        {
+          id: "macbook",
+          displayName: "MacBook",
+          transport: "bridge",
+          bridgeBaseUrl: "http://127.0.0.1:8788",
+          sshHost: "macbook.tail",
+          sshUser: "moritaeiji",
+          workspaceRoot: "/Users/moritaeiji/.discord-orchestrator/workspaces",
+          codexBin: "codex",
+          aliases: ["macbook"],
+        },
+      ],
+    }, {
+      autopilotBin: "uv",
+      workdir: tempRoot,
+    }, {
+      workdir: tempRoot,
+    });
+
+    const job = await service.createJob({
+      prompt: "follow up",
+      target: "ssh",
+      runnerId: "macbook",
+      discordChannelId: "channel-1",
+    });
+
+    expect(job.target).toBe("ssh");
+    expect(job.runner_id).toBe("macbook");
+  });
+
   it("formats codex jsonl logs into a readable preview", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
     const dataDir = path.join(tempRoot, "data");

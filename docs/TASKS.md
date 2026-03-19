@@ -28,4 +28,4 @@
 - [x] `/codex logs` を実装
 - [x] `/codex cancel` を実装
 - [x] `codex exec --json` 実行へ置き換える
-- [ ] `ssh` runner を実装
+- [x] `ssh` / remote runner を実装

@@ -10,15 +10,18 @@ import {
 } from "./autopilot.js";
 import {
   buildCodexProgress,
+  type CodexExecutor,
   createCodexExecutor,
   renderCodexLogPreview,
   type CodexExecConfig,
   type CodexEvent,
 } from "./codexExec.js";
+import { createBridgeCodexExecutor } from "./bridgeCodexExec.js";
 import {
   createShellExecutor,
   type ShellExecConfig,
 } from "./shellExec.js";
+import type { CodexTarget } from "../targets.js";
 import type { JobStore } from "./store.js";
 import type {
   JobProgress,
@@ -38,6 +41,7 @@ type JobService = {
   createJob(input: {
     prompt: string;
     target: RunnerTarget;
+    runnerId?: string;
     discordChannelId: string;
     externalId?: string;
   }): Promise<JobRecord>;
@@ -89,21 +93,35 @@ export function createJobService(
   store: JobStore,
   logDir: string,
   logger: Logger,
-  codexConfig: CodexExecConfig,
+  codexConfig: CodexExecConfig & {
+    bridgeAuthToken?: string;
+    targets?: CodexTarget[];
+  },
   autopilotConfig: AutopilotConfig,
   shellConfig: ShellExecConfig,
 ): JobService {
   const activeJobs = new Map<string, ActiveJob>();
   const codexExecutor = createCodexExecutor(codexConfig, logger);
+  const bridgeCodexExecutor =
+    codexConfig.targets && codexConfig.targets.length > 0
+      ? createBridgeCodexExecutor(
+          {
+            ...codexConfig,
+            targets: codexConfig.targets,
+          },
+          logger,
+        )
+      : null;
   const autopilotExecutor = createAutopilotExecutor(autopilotConfig, logger);
   const shellExecutor = createShellExecutor(shellConfig, logger);
 
   return {
-    async createJob({ prompt, target, discordChannelId, externalId }) {
+    async createJob({ prompt, target, runnerId, discordChannelId, externalId }) {
       let job = await store.create({
         tool: "codex",
         prompt,
         target,
+        runner_id: runnerId,
         status: "queued",
         discord_channel_id: discordChannelId,
         external_id: externalId,
@@ -117,19 +135,27 @@ export function createJobService(
       return await startTrackedJob(activeJobs, jobId, async (abortController) => {
         let job = await requireJob(store, jobId);
 
-        if (job.target !== "local") {
-          throw new Error(`Unsupported target for local runner: ${job.target}`);
+        const executor =
+          job.target === "local"
+            ? codexExecutor
+            : resolveRemoteCodexExecutor(job, bridgeCodexExecutor);
+
+        if (!executor) {
+          throw new Error(`Unsupported codex target: ${job.target}`);
         }
 
         job = await ensureLogPath(store, logDir, job);
         job = await store.update(jobId, {
           status: "running",
           started_at: new Date().toISOString(),
-          summary: "Preparing workspace clone",
+          summary:
+            job.target === "local"
+              ? "Preparing workspace clone"
+              : `Dispatching remote codex job to ${job.runner_id ?? job.target}`,
         });
         await onUpdate(job);
 
-        const result = await codexExecutor.run(job, {
+        const result = await executor.run(job, {
           signal: abortController.signal,
           onPid: async (pid) => {
             const updated = await store.update(jobId, { pid });
@@ -426,6 +452,17 @@ export function createJobService(
       }
     },
   };
+}
+
+function resolveRemoteCodexExecutor(
+  job: JobRecord,
+  bridgeCodexExecutor: CodexExecutor | null,
+): CodexExecutor | null {
+  if (job.target === "ssh" && bridgeCodexExecutor) {
+    return bridgeCodexExecutor;
+  }
+
+  return null;
 }
 
 async function startTrackedJob(

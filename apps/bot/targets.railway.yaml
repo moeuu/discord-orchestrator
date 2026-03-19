@@ -6,8 +6,8 @@ targets:
     displayName: MacBook
     transport: bridge
     bridgeBaseUrl: http://codex-bridge.railway.internal
-    sshHost: macbook.tail-scale.ts.net
-    sshUser: codexrunner
-    workspaceRoot: /Users/codexrunner/.discord-orchestrator/workspaces
+    sshHost: moeu-macbook.tail19b101.ts.net
+    sshUser: moritaeiji
+    workspaceRoot: /Users/moritaeiji/.discord-orchestrator/workspaces
     codexBin: codex
     aliases: [macbook, mbp]

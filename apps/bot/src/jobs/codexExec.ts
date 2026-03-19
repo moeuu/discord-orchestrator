@@ -5,7 +5,7 @@ import type { Logger } from "../util/logger.js";
 import { createLocalRunner, type Runner } from "./runner.js";
 import type { JobProgress, JobRecord, JobResult } from "./types.js";
 
-type CodexExecSandboxMode =
+export type CodexExecSandboxMode =
   | "read-only"
   | "workspace-write"
   | "danger-full-access";
@@ -20,13 +20,13 @@ export type CodexExecConfig = {
 
 export type CodexEvent = Record<string, unknown>;
 
-type CodexRunOptions = {
+export type CodexRunOptions = {
   signal?: AbortSignal;
   onPid?: (pid: number) => Promise<void> | void;
   onEvent?: (event: CodexEvent, meta: { agentMessage: string | null }) => Promise<void> | void;
 };
 
-type CodexExecutor = {
+export type CodexExecutor = {
   run(job: JobRecord, options?: CodexRunOptions): Promise<JobResult>;
 };
 
