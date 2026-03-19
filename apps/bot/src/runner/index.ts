@@ -81,13 +81,19 @@ async function executeJob(
   executor: ReturnType<typeof createCodexExecutor>,
   logger: ReturnType<typeof createLogger>,
 ): Promise<void> {
+  const localJob: JobRecord = {
+    ...job,
+    // The bot persists server-side log paths under Railway runtime paths like /app/logs.
+    // The local runner should keep its own scratch logs and only stream events back.
+    log_path: undefined,
+  };
   const abortController = new AbortController();
   const heartbeatTimer = setInterval(() => {
     void sendHeartbeat(config, job.id, abortController, logger);
   }, config.runnerHeartbeatIntervalMs);
 
   try {
-    const result = await executor.run(job, {
+    const result = await executor.run(localJob, {
       signal: abortController.signal,
       onPid: async (pid) => {
         await apiFetch(config, `/api/runner/jobs/${job.id}/start`, {
