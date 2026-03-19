@@ -16,15 +16,6 @@ export const commandDefinitions = [
             .setName("prompt")
             .setDescription("Codex に渡す指示")
             .setRequired(true),
-        )
-        .addStringOption((option) =>
-          option
-            .setName("target")
-            .setDescription("実行ターゲット")
-            .addChoices(
-              { name: "macbook", value: "macbook" },
-              { name: "local", value: "local" },
-            ),
         ),
     )
     .addSubcommand((subcommand) =>
@@ -98,15 +89,6 @@ export const commandDefinitions = [
           option
             .setName("dry_run")
             .setDescription("提出を伴わない dry-run で実行する"),
-        )
-        .addStringOption((option) =>
-          option
-            .setName("runner")
-            .setDescription("実行先 runner")
-            .addChoices(
-              { name: "lab_rdp", value: "lab_rdp" },
-              { name: "local", value: "local" },
-            ),
         ),
     )
     .addSubcommand((subcommand) =>

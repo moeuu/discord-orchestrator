@@ -10,19 +10,19 @@ function emptyToUndefined(value: unknown): unknown {
   return value === "" ? undefined : value;
 }
 
-// Accept the shorter APP_ID name in env while keeping the old key working.
 const configSchema = z.object({
   DISCORD_TOKEN: z.string().min(1),
   DISCORD_APP_ID: z.string().min(1).optional(),
   DISCORD_APPLICATION_ID: z.string().min(1).optional(),
   DISCORD_GUILD_ID: z.string().min(1),
-  CODEX_BIN: z.string().min(1).default("codex"),
-  TARGETS_CONFIG_PATH: z.string().min(1).default("../../config/targets.yaml"),
-  CODEX_DEFAULT_TARGET: z.string().min(1).default("macbook"),
-  RUNNER_BRIDGE_AUTH_TOKEN: z.preprocess(
+  BOT_RUNNER_ID: z.string().min(1).default("macbook"),
+  BOT_RUNNER_LABEL: z.string().min(1).default("MacBook"),
+  RUNNER_API_TOKEN: z.preprocess(
     emptyToUndefined,
     z.string().min(1).optional(),
   ),
+  RUNNER_LONG_POLL_TIMEOUT_MS: z.coerce.number().int().positive().default(25000),
+  CODEX_BIN: z.string().min(1).default("codex"),
   STORAGE_ROOT: z.preprocess(
     emptyToUndefined,
     z.string().min(1).optional(),
@@ -104,51 +104,17 @@ const configSchema = z.object({
     z.string().min(1).optional(),
   ),
   AUTOPILOT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
-  AUTOPILOT_REMOTE_WATCH_ENABLED: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((value) => value === "true"),
-  AUTOPILOT_REMOTE_WATCH_HOST: z.preprocess(
-    emptyToUndefined,
-    z.string().min(1).optional(),
-  ),
-  AUTOPILOT_REMOTE_WATCH_RUNNER_ID: z.preprocess(
-    emptyToUndefined,
-    z.string().min(1).optional(),
-  ),
-  AUTOPILOT_REMOTE_WATCH_CHANNEL_ID: z.preprocess(
-    emptyToUndefined,
-    z.string().min(1).optional(),
-  ),
-  AUTOPILOT_REMOTE_SESSION_DIR: z
-    .string()
-    .min(1)
-    .default("~/.discord-orchestrator/autopilot-sessions"),
-  AUTOPILOT_REMOTE_POLL_INTERVAL_MS: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(5000),
-  AUTOPILOT_REMOTE_SESSION_LIMIT: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(10),
-  AUTOPILOT_REMOTE_LOG_CHUNK_BYTES: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(16384),
 });
 
 export type AppConfig = {
   discordToken: string;
   discordApplicationId: string;
   discordGuildId: string;
+  botRunnerId: string;
+  botRunnerLabel: string;
+  runnerApiToken?: string;
+  runnerLongPollTimeoutMs: number;
   codexBin: string;
-  targetsConfigPath: string;
-  codexDefaultTarget: string;
-  runnerBridgeAuthToken?: string;
   workspaceRoot: string;
   workspaceSourceRepo: string;
   storageRoot?: string;
@@ -171,14 +137,6 @@ export type AppConfig = {
   autopilotWorkdir?: string;
   autopilotArtifactsDir?: string;
   autopilotPollIntervalMs: number;
-  autopilotRemoteWatchEnabled: boolean;
-  autopilotRemoteWatchHost?: string;
-  autopilotRemoteWatchRunnerId?: string;
-  autopilotRemoteWatchChannelId?: string;
-  autopilotRemoteSessionDir: string;
-  autopilotRemotePollIntervalMs: number;
-  autopilotRemoteSessionLimit: number;
-  autopilotRemoteLogChunkBytes: number;
 };
 
 export function loadConfig(): AppConfig {
@@ -203,10 +161,11 @@ export function loadConfig(): AppConfig {
     discordToken: parsed.DISCORD_TOKEN,
     discordApplicationId,
     discordGuildId: parsed.DISCORD_GUILD_ID,
+    botRunnerId: parsed.BOT_RUNNER_ID,
+    botRunnerLabel: parsed.BOT_RUNNER_LABEL,
+    runnerApiToken: parsed.RUNNER_API_TOKEN,
+    runnerLongPollTimeoutMs: parsed.RUNNER_LONG_POLL_TIMEOUT_MS,
     codexBin: parsed.CODEX_BIN,
-    targetsConfigPath: resolveLocalPath(process.cwd(), parsed.TARGETS_CONFIG_PATH),
-    codexDefaultTarget: parsed.CODEX_DEFAULT_TARGET,
-    runnerBridgeAuthToken: parsed.RUNNER_BRIDGE_AUTH_TOKEN,
     storageRoot,
     workspaceRoot: resolveStoragePath(
       process.cwd(),
@@ -256,16 +215,6 @@ export function loadConfig(): AppConfig {
       ? resolveLocalPath(process.cwd(), parsed.AUTOPILOT_ARTIFACTS_DIR)
       : undefined,
     autopilotPollIntervalMs: parsed.AUTOPILOT_POLL_INTERVAL_MS,
-    autopilotRemoteWatchEnabled: parsed.AUTOPILOT_REMOTE_WATCH_ENABLED,
-    autopilotRemoteWatchHost: parsed.AUTOPILOT_REMOTE_WATCH_HOST,
-    autopilotRemoteWatchRunnerId:
-      parsed.AUTOPILOT_REMOTE_WATCH_RUNNER_ID ??
-      parsed.AUTOPILOT_REMOTE_WATCH_HOST,
-    autopilotRemoteWatchChannelId: parsed.AUTOPILOT_REMOTE_WATCH_CHANNEL_ID,
-    autopilotRemoteSessionDir: parsed.AUTOPILOT_REMOTE_SESSION_DIR,
-    autopilotRemotePollIntervalMs: parsed.AUTOPILOT_REMOTE_POLL_INTERVAL_MS,
-    autopilotRemoteSessionLimit: parsed.AUTOPILOT_REMOTE_SESSION_LIMIT,
-    autopilotRemoteLogChunkBytes: parsed.AUTOPILOT_REMOTE_LOG_CHUNK_BYTES,
   };
 }
 

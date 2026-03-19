@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.moritaeiji.codex-runner</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/moritaeiji/agent/discord-orchestrator/scripts/run-macbook-runner.sh</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/moritaeiji/agent/discord-orchestrator/apps/bot</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/moritaeiji/.discord-orchestrator/logs/macbook-runner.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/moritaeiji/.discord-orchestrator/logs/macbook-runner.stderr.log</string>
+</dict>
+</plist>

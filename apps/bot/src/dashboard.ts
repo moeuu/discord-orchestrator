@@ -1,13 +1,35 @@
 import http from "node:http";
 import { URL } from "node:url";
 
+import type { CodexEvent } from "./jobs/codexExec.js";
+import type { JobRecord, JobResult } from "./jobs/types.js";
 import type { Logger } from "./util/logger.js";
-import type { JobRecord } from "./jobs/types.js";
+
+type RunnerHeartbeat = {
+  job: JobRecord | null;
+  cancelRequested: boolean;
+};
 
 type DashboardService = {
   listJobs(limit?: number): Promise<JobRecord[]>;
   getJob(jobId: string): Promise<JobRecord | null>;
   getLogInfo(jobId: string): Promise<{ preview: string | null }>;
+  claimNextRunnerJob(runnerId: string): Promise<JobRecord | null>;
+  markRunnerJobStarted(jobId: string, pid?: number): Promise<JobRecord | null>;
+  appendRunnerCodexEvent(
+    jobId: string,
+    event: CodexEvent,
+    agentMessage: string | null,
+  ): Promise<RunnerHeartbeat>;
+  heartbeatRunnerJob(jobId: string): Promise<RunnerHeartbeat>;
+  finishRunnerJob(jobId: string, result: JobResult): Promise<JobRecord | null>;
+};
+
+type DashboardOptions = {
+  runnerApiToken?: string;
+  onJobUpdated?: (job: JobRecord) => Promise<void>;
+  runnerLongPollTimeoutMs?: number;
+  runnerPollIntervalMs?: number;
 };
 
 export function startDashboardServer(
@@ -15,11 +37,112 @@ export function startDashboardServer(
   host: string,
   service: DashboardService,
   logger: Logger,
+  options: DashboardOptions = {},
 ): http.Server {
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
     try {
+      if (request.method === "GET" && url.pathname === "/health") {
+        return json(response, 200, { ok: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/runner/poll") {
+        if (!isAuthorized(request, options.runnerApiToken)) {
+          return json(response, 401, { error: "unauthorized" });
+        }
+
+        const body = parseJsonBody(await readBody(request));
+        const runnerId = typeof body.runnerId === "string"
+          ? body.runnerId.trim()
+          : "";
+        if (!runnerId) {
+          return json(response, 400, { error: "runnerId is required" });
+        }
+
+        const job = await longPollForJob(
+          service,
+          runnerId,
+          options.runnerLongPollTimeoutMs ?? 25000,
+          options.runnerPollIntervalMs ?? 1000,
+        );
+        if (!job) {
+          response.writeHead(204);
+          response.end();
+          return;
+        }
+
+        return json(response, 200, { job });
+      }
+
+      if (
+        request.method === "POST" &&
+        url.pathname.startsWith("/api/runner/jobs/")
+      ) {
+        if (!isAuthorized(request, options.runnerApiToken)) {
+          return json(response, 401, { error: "unauthorized" });
+        }
+
+        const suffix = url.pathname.replace("/api/runner/jobs/", "");
+        const [jobId, action] = suffix.split("/");
+        if (!jobId || !action) {
+          return json(response, 404, { error: "not found" });
+        }
+
+        const body = parseJsonBody(await readBody(request));
+
+        if (action === "start") {
+          const pid = typeof body.pid === "number" ? body.pid : undefined;
+          const job = await service.markRunnerJobStarted(jobId, pid);
+          if (!job) {
+            return json(response, 404, { error: "job not found" });
+          }
+          await options.onJobUpdated?.(job);
+          return json(response, 200, { job });
+        }
+
+        if (action === "event") {
+          if (!body.event || typeof body.event !== "object") {
+            return json(response, 400, { error: "event is required" });
+          }
+
+          const heartbeat = await service.appendRunnerCodexEvent(
+            jobId,
+            body.event as CodexEvent,
+            typeof body.agentMessage === "string" ? body.agentMessage : null,
+          );
+          if (!heartbeat.job) {
+            return json(response, 404, { error: "job not found" });
+          }
+          await options.onJobUpdated?.(heartbeat.job);
+          return json(response, 200, {
+            cancelRequested: heartbeat.cancelRequested,
+          });
+        }
+
+        if (action === "heartbeat") {
+          const heartbeat = await service.heartbeatRunnerJob(jobId);
+          if (!heartbeat.job) {
+            return json(response, 404, { error: "job not found" });
+          }
+          return json(response, 200, {
+            cancelRequested: heartbeat.cancelRequested,
+          });
+        }
+
+        if (action === "finish") {
+          const result = parseJobResult(body);
+          const job = await service.finishRunnerJob(jobId, result);
+          if (!job) {
+            return json(response, 404, { error: "job not found" });
+          }
+          await options.onJobUpdated?.(job);
+          return json(response, 200, { job });
+        }
+
+        return json(response, 404, { error: "not found" });
+      }
+
       if (url.pathname === "/api/jobs") {
         const jobs = await service.listJobs(50);
         return json(response, 200, { jobs });
@@ -53,6 +176,79 @@ export function startDashboardServer(
   });
 
   return server;
+}
+
+async function longPollForJob(
+  service: DashboardService,
+  runnerId: string,
+  timeoutMs: number,
+  intervalMs: number,
+): Promise<JobRecord | null> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const job = await service.claimNextRunnerJob(runnerId);
+    if (job) {
+      return job;
+    }
+    await delay(intervalMs);
+  }
+
+  return null;
+}
+
+async function readBody(request: http.IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function parseJsonBody(raw: string): Record<string, unknown> {
+  if (!raw.trim()) {
+    return {};
+  }
+
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+function parseJobResult(body: Record<string, unknown>): JobResult {
+  if (
+    body.status !== "succeeded" &&
+    body.status !== "failed" &&
+    body.status !== "cancelled"
+  ) {
+    throw new Error("Invalid job result status");
+  }
+
+  return {
+    status: body.status,
+    summary:
+      typeof body.summary === "string" && body.summary.trim()
+        ? body.summary
+        : "runner finished",
+    finished_at:
+      typeof body.finished_at === "string" && body.finished_at.trim()
+        ? body.finished_at
+        : new Date().toISOString(),
+  };
+}
+
+function isAuthorized(
+  request: http.IncomingMessage,
+  authToken: string | undefined,
+): boolean {
+  if (!authToken) {
+    return true;
+  }
+
+  return request.headers.authorization === `Bearer ${authToken}`;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 function json(
@@ -201,7 +397,7 @@ function renderPage(): string {
   <body>
     <div class="wrap">
       <h1>Automation Dashboard</h1>
-      <div class="muted">Kaggle Autopilot と Codex ジョブの実行状況を追跡します。</div>
+      <div class="muted">Codex と Autopilot ジョブの実行状況を追跡します。</div>
       <div class="grid">
         <section class="panel">
           <h2>Jobs</h2>

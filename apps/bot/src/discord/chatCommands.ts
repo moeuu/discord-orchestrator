@@ -3,7 +3,7 @@ export function extractChatShellCommand(
   botUserId?: string,
   botRoleIds: string[] = [],
 ): string | null {
-  const normalized = stripMention(content, botUserId, botRoleIds).trim();
+  const normalized = stripBotMention(content, botUserId, botRoleIds).trim();
   if (!normalized || !normalized.includes("実行")) {
     return null;
   }
@@ -45,7 +45,7 @@ export function extractChatShellCommand(
   return null;
 }
 
-function stripMention(
+export function stripBotMention(
   content: string,
   botUserId?: string,
   botRoleIds: string[] = [],

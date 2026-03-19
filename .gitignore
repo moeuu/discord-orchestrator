@@ -3,7 +3,9 @@ dist/
 .DS_Store
 .env
 .env.*
+apps/bot/.runner.env
 !apps/bot/.env.example
+!apps/bot/.runner.env.example
 data/
 logs/
 config/targets.yaml

@@ -70,7 +70,7 @@ describe("createJobService", () => {
     expect(job.external_id).toBe("thread-123");
   });
 
-  it("stores runner_id for remote codex jobs", async () => {
+  it("stores runner_id for queued runner codex jobs", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
     const dataDir = path.join(tempRoot, "data");
     const logDir = path.join(tempRoot, "logs");
@@ -79,19 +79,6 @@ describe("createJobService", () => {
       codexBin: "codex",
       workspaceRoot: path.join(tempRoot, "workspaces"),
       sourceRepo: "git@github.com:moeuu/discord-orchestrator.git",
-      targets: [
-        {
-          id: "macbook",
-          displayName: "MacBook",
-          transport: "bridge",
-          bridgeBaseUrl: "http://127.0.0.1:8788",
-          sshHost: "macbook.tail",
-          sshUser: "moritaeiji",
-          workspaceRoot: "/Users/moritaeiji/.discord-orchestrator/workspaces",
-          codexBin: "codex",
-          aliases: ["macbook"],
-        },
-      ],
     }, {
       autopilotBin: "uv",
       workdir: tempRoot,
@@ -101,12 +88,12 @@ describe("createJobService", () => {
 
     const job = await service.createJob({
       prompt: "follow up",
-      target: "ssh",
+      target: "runner",
       runnerId: "macbook",
       discordChannelId: "channel-1",
     });
 
-    expect(job.target).toBe("ssh");
+    expect(job.target).toBe("runner");
     expect(job.runner_id).toBe("macbook");
   });
 
@@ -151,7 +138,7 @@ describe("createJobService", () => {
     expect(logInfo.preview).toContain("考え: 確認しました。");
   });
 
-  it("upserts a remote manual autopilot session by external id", async () => {
+  it("claims, updates, and finishes a runner codex job", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "job-service-"));
     const dataDir = path.join(tempRoot, "data");
     const logDir = path.join(tempRoot, "logs");
@@ -167,51 +154,36 @@ describe("createJobService", () => {
       workdir: tempRoot,
     });
 
-    const first = await service.observeRemoteAutopilotSession({
-      sessionId: "session-1",
-      competition: "house-prices",
-      instruction: "try a tree baseline",
-      command: "uv run kagglebot autopilot house-prices --goal 'try a tree baseline'",
-      runnerId: "lab_rdp",
+    const queued = await service.createJob({
+      prompt: "inspect the repo",
+      target: "runner",
+      runnerId: "macbook",
       discordChannelId: "channel-1",
-      dashboardBaseUrl: "http://127.0.0.1:8787",
-      remoteLogPath: "/home/ubuntu/.discord-orchestrator/autopilot-sessions/session-1/console.log",
-      artifactRoot: "/home/ubuntu/kaggle-autopilot/artifacts/house-prices",
-      status: "running",
-      startedAt: "2026-03-15T00:00:00.000Z",
-      progress: {
-        phase: "iterating",
-        current_iter: 2,
-      },
     });
 
-    const second = await service.observeRemoteAutopilotSession({
-      sessionId: "session-1",
-      competition: "house-prices",
-      instruction: "try a tree baseline",
-      command: "uv run kagglebot autopilot house-prices --goal 'try a tree baseline'",
-      runnerId: "lab_rdp",
-      discordChannelId: "channel-1",
-      dashboardBaseUrl: "http://127.0.0.1:8787",
-      remoteLogPath: "/home/ubuntu/.discord-orchestrator/autopilot-sessions/session-1/console.log",
-      artifactRoot: "/home/ubuntu/kaggle-autopilot/artifacts/house-prices",
+    const claimed = await service.claimNextRunnerJob("macbook");
+    expect(claimed?.id).toBe(queued.id);
+    expect(claimed?.status).toBe("running");
+
+    const started = await service.markRunnerJobStarted(queued.id, 4242);
+    expect(started?.pid).toBe(4242);
+
+    const heartbeat = await service.appendRunnerCodexEvent(
+      queued.id,
+      { type: "thread.started", thread_id: "thread-1" },
+      "started",
+    );
+    expect(heartbeat.job?.external_id).toBe("thread-1");
+    expect(heartbeat.cancelRequested).toBe(false);
+
+    const finished = await service.finishRunnerJob(queued.id, {
       status: "succeeded",
-      startedAt: "2026-03-15T00:00:00.000Z",
-      finishedAt: "2026-03-15T00:10:00.000Z",
-      progress: {
-        phase: "completed",
-        current_iter: 5,
-      },
+      summary: "done",
+      finished_at: "2026-03-15T00:10:00.000Z",
     });
 
-    expect(first.created).toBe(true);
-    expect(first.job.external_id).toBe("session-1");
-    expect(first.job.remote_log_path).toContain("console.log");
-    expect(first.job.log_path).toContain(path.join("logs", `autopilot-${first.job.id}.log`));
-    expect(second.created).toBe(false);
-    expect(second.job.id).toBe(first.job.id);
-    expect(second.job.status).toBe("succeeded");
-    expect(second.job.finished_at).toBe("2026-03-15T00:10:00.000Z");
-    expect(second.job.progress?.phase).toBe("completed");
+    expect(finished?.status).toBe("succeeded");
+    expect(finished?.summary).toBe("done");
+    expect(finished?.finished_at).toBe("2026-03-15T00:10:00.000Z");
   });
 });

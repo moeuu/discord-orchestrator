@@ -16,17 +16,15 @@ import {
   type CodexExecConfig,
   type CodexEvent,
 } from "./codexExec.js";
-import { createBridgeCodexExecutor } from "./bridgeCodexExec.js";
 import {
   createShellExecutor,
   type ShellExecConfig,
 } from "./shellExec.js";
-import type { CodexTarget } from "../targets.js";
 import type { JobStore } from "./store.js";
 import type {
   JobProgress,
   JobRecord,
-  JobStatus,
+  JobResult,
   RunnerTarget,
 } from "./types.js";
 
@@ -35,6 +33,11 @@ type JobUpdateHandler = (job: JobRecord) => Promise<void>;
 type JobLogInfo = {
   job: JobRecord | null;
   preview: string | null;
+};
+
+type RunnerHeartbeat = {
+  job: JobRecord | null;
+  cancelRequested: boolean;
 };
 
 type JobService = {
@@ -46,6 +49,15 @@ type JobService = {
     externalId?: string;
   }): Promise<JobRecord>;
   startJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
+  claimNextRunnerJob(runnerId: string): Promise<JobRecord | null>;
+  markRunnerJobStarted(jobId: string, pid?: number): Promise<JobRecord | null>;
+  appendRunnerCodexEvent(
+    jobId: string,
+    event: CodexEvent,
+    agentMessage: string | null,
+  ): Promise<RunnerHeartbeat>;
+  heartbeatRunnerJob(jobId: string): Promise<RunnerHeartbeat>;
+  finishRunnerJob(jobId: string, result: JobResult): Promise<JobRecord | null>;
   createShellJob(input: {
     command: string;
     discordChannelId: string;
@@ -58,27 +70,11 @@ type JobService = {
     maxIterations?: number;
     dryRun?: boolean;
     target: RunnerTarget;
-    runnerId: string;
+    runnerId?: string;
     discordChannelId: string;
     dashboardBaseUrl: string;
   }): Promise<JobRecord>;
   startAutopilotJob(jobId: string, onUpdate: JobUpdateHandler): Promise<void>;
-  observeRemoteAutopilotSession(input: {
-    sessionId: string;
-    competition: string;
-    instruction: string;
-    command: string;
-    runnerId: string;
-    discordChannelId: string;
-    dashboardBaseUrl: string;
-    remoteLogPath: string;
-    artifactRoot?: string;
-    status: JobStatus;
-    startedAt?: string;
-    finishedAt?: string;
-    summary?: string;
-    progress?: JobProgress;
-  }): Promise<{ job: JobRecord; created: boolean }>;
   cancelJob(jobId: string): Promise<JobRecord | null>;
   getJob(jobId?: string | null): Promise<JobRecord | null>;
   listJobs(limit?: number): Promise<JobRecord[]>;
@@ -93,25 +89,12 @@ export function createJobService(
   store: JobStore,
   logDir: string,
   logger: Logger,
-  codexConfig: CodexExecConfig & {
-    bridgeAuthToken?: string;
-    targets?: CodexTarget[];
-  },
+  codexConfig: CodexExecConfig,
   autopilotConfig: AutopilotConfig,
   shellConfig: ShellExecConfig,
 ): JobService {
   const activeJobs = new Map<string, ActiveJob>();
   const codexExecutor = createCodexExecutor(codexConfig, logger);
-  const bridgeCodexExecutor =
-    codexConfig.targets && codexConfig.targets.length > 0
-      ? createBridgeCodexExecutor(
-          {
-            ...codexConfig,
-            targets: codexConfig.targets,
-          },
-          logger,
-        )
-      : null;
   const autopilotExecutor = createAutopilotExecutor(autopilotConfig, logger);
   const shellExecutor = createShellExecutor(shellConfig, logger);
 
@@ -125,7 +108,10 @@ export function createJobService(
         status: "queued",
         discord_channel_id: discordChannelId,
         external_id: externalId,
-        summary: "Queued codex exec",
+        summary:
+          target === "runner"
+            ? `Queued for ${runnerId ?? "runner"}`
+            : "Queued codex exec",
       });
 
       job = await ensureLogPath(store, logDir, job);
@@ -134,13 +120,7 @@ export function createJobService(
     async startJob(jobId, onUpdate) {
       return await startTrackedJob(activeJobs, jobId, async (abortController) => {
         let job = await requireJob(store, jobId);
-
-        const executor =
-          job.target === "local"
-            ? codexExecutor
-            : resolveRemoteCodexExecutor(job, bridgeCodexExecutor);
-
-        if (!executor) {
+        if (job.target !== "local") {
           throw new Error(`Unsupported codex target: ${job.target}`);
         }
 
@@ -148,14 +128,11 @@ export function createJobService(
         job = await store.update(jobId, {
           status: "running",
           started_at: new Date().toISOString(),
-          summary:
-            job.target === "local"
-              ? "Preparing workspace clone"
-              : `Dispatching remote codex job to ${job.runner_id ?? job.target}`,
+          summary: "Preparing workspace clone",
         });
         await onUpdate(job);
 
-        const result = await executor.run(job, {
+        const result = await codexExecutor.run(job, {
           signal: abortController.signal,
           onPid: async (pid) => {
             const updated = await store.update(jobId, { pid });
@@ -179,9 +156,74 @@ export function createJobService(
           status: result.status,
           finished_at: result.finished_at,
           summary: result.summary,
+          cancel_requested_at: undefined,
         });
         await onUpdate(finalJob);
       }, logger, store, onUpdate);
+    },
+    async claimNextRunnerJob(runnerId) {
+      const jobs = await store.list();
+      const next = jobs.find((job) =>
+        job.tool === "codex" &&
+        job.target === "runner" &&
+        job.runner_id === runnerId &&
+        job.status === "queued"
+      );
+
+      if (!next) {
+        return null;
+      }
+
+      const job = await ensureLogPath(store, logDir, next);
+      return await store.update(job.id, {
+        status: "running",
+        started_at: job.started_at ?? new Date().toISOString(),
+        summary: "Preparing workspace clone",
+        cancel_requested_at: undefined,
+      });
+    },
+    async markRunnerJobStarted(jobId, pid) {
+      const job = await store.get(jobId);
+      if (!job || job.target !== "runner") {
+        return null;
+      }
+
+      return await store.update(jobId, {
+        pid,
+      });
+    },
+    async appendRunnerCodexEvent(jobId, event, agentMessage) {
+      const updated = await handleCodexEvent(
+        store,
+        jobId,
+        event,
+        agentMessage,
+      );
+      const job = updated ?? await store.get(jobId);
+      return {
+        job,
+        cancelRequested: Boolean(job?.cancel_requested_at),
+      };
+    },
+    async heartbeatRunnerJob(jobId) {
+      const job = await store.get(jobId);
+      return {
+        job,
+        cancelRequested: Boolean(job?.cancel_requested_at),
+      };
+    },
+    async finishRunnerJob(jobId, result) {
+      const job = await store.get(jobId);
+      if (!job || job.target !== "runner") {
+        return null;
+      }
+
+      return await store.update(jobId, {
+        status: result.status,
+        finished_at: result.finished_at,
+        summary: result.summary,
+        cancel_requested_at: undefined,
+      });
     },
     async createShellJob({ command, discordChannelId }) {
       let job = await store.create({
@@ -312,83 +354,6 @@ export function createJobService(
         await onUpdate(finalJob);
       }, logger, store, onUpdate);
     },
-    async observeRemoteAutopilotSession({
-      sessionId,
-      competition,
-      instruction,
-      command,
-      runnerId,
-      discordChannelId,
-      dashboardBaseUrl,
-      remoteLogPath,
-      artifactRoot,
-      status,
-      startedAt,
-      finishedAt,
-      summary,
-      progress,
-    }) {
-      const existing = await findJobByExternalId(store, sessionId);
-      const nextSummary =
-        summary ??
-        buildAutopilotSummary(progress ?? null) ??
-        `Observed autopilot for ${competition}`;
-
-      if (existing) {
-        let job = await store.update(existing.id, {
-          prompt: instruction || existing.prompt,
-          status,
-          runner_id: runnerId,
-          summary: nextSummary,
-          started_at: startedAt ?? existing.started_at,
-          finished_at: finishedAt ?? existing.finished_at,
-          remote_log_path: remoteLogPath,
-          artifact_root: artifactRoot ?? existing.artifact_root,
-          progress: progress ?? existing.progress,
-          input: {
-            ...existing.input,
-            competition,
-            instruction,
-            command,
-            manualSessionId: sessionId,
-            observed: true,
-          },
-        });
-        job = await ensureLogPath(store, logDir, job);
-        return { job, created: false };
-      }
-
-      let job = await store.create({
-        tool: "autopilot",
-        prompt: instruction || command,
-        target: "ssh",
-        status,
-        runner_id: runnerId,
-        discord_channel_id: discordChannelId,
-        external_id: sessionId,
-        remote_log_path: remoteLogPath,
-        remote_log_offset: 0,
-        summary: nextSummary,
-        started_at: startedAt,
-        finished_at: finishedAt,
-        artifact_root: artifactRoot,
-        progress,
-        input: {
-          competition,
-          instruction,
-          command,
-          manualSessionId: sessionId,
-          observed: true,
-        },
-        dashboard_url: `${dashboardBaseUrl.replace(/\/$/, "")}/jobs/__JOB_ID__`,
-      });
-
-      job = await ensureLogPath(store, logDir, job);
-      job = await store.update(job.id, {
-        dashboard_url: `${dashboardBaseUrl.replace(/\/$/, "")}/jobs/${job.id}`,
-      });
-      return { job, created: true };
-    },
     async cancelJob(jobId) {
       const job = await store.get(jobId);
       if (!job) {
@@ -403,11 +368,28 @@ export function createJobService(
         });
       }
 
-      if (job.status === "queued" || job.status === "running") {
+      if (job.status === "queued") {
         return await store.update(jobId, {
           status: "cancelled",
           finished_at: new Date().toISOString(),
           summary: "Cancelled before execution completed",
+          cancel_requested_at: undefined,
+        });
+      }
+
+      if (job.target === "runner" && job.status === "running") {
+        return await store.update(jobId, {
+          cancel_requested_at: new Date().toISOString(),
+          summary: "Cancellation requested",
+        });
+      }
+
+      if (job.status === "running") {
+        return await store.update(jobId, {
+          status: "cancelled",
+          finished_at: new Date().toISOString(),
+          summary: "Cancelled before execution completed",
+          cancel_requested_at: undefined,
         });
       }
 
@@ -454,17 +436,6 @@ export function createJobService(
   };
 }
 
-function resolveRemoteCodexExecutor(
-  job: JobRecord,
-  bridgeCodexExecutor: CodexExecutor | null,
-): CodexExecutor | null {
-  if (job.target === "ssh" && bridgeCodexExecutor) {
-    return bridgeCodexExecutor;
-  }
-
-  return null;
-}
-
 async function startTrackedJob(
   activeJobs: Map<string, ActiveJob>,
   jobId: string,
@@ -487,6 +458,7 @@ async function startTrackedJob(
         status: "failed",
         finished_at: new Date().toISOString(),
         summary: error instanceof Error ? error.message : "job execution failed",
+        cancel_requested_at: undefined,
       });
       await onUpdate(failed);
     }
@@ -524,22 +496,22 @@ async function handleCodexEvent(
   store: JobStore,
   jobId: string,
   event: CodexEvent,
-  agentMessage: string | null,
+  previousAgentMessage: string | null,
 ): Promise<JobRecord | null> {
   const job = await store.get(jobId);
   if (!job) {
     return null;
   }
 
-  const progress = buildCodexProgress(job.progress, event, agentMessage);
+  const progress = buildCodexProgress(job.progress, event, previousAgentMessage);
   const patch: Partial<JobRecord> = {
     progress,
   };
 
   if (progress.activity) {
     patch.summary = progress.activity;
-  } else if (agentMessage) {
-    patch.summary = agentMessage;
+  } else if (previousAgentMessage) {
+    patch.summary = previousAgentMessage;
   }
 
   if (
@@ -551,8 +523,10 @@ async function handleCodexEvent(
   }
 
   if (typeof event.type === "string" && event.type === "task_complete") {
-    patch.summary = agentMessage ?? patch.summary;
+    patch.summary = previousAgentMessage ?? patch.summary;
   }
+
+  await appendJsonLine(job.log_path, event);
 
   if (Object.keys(patch).length === 0) {
     return null;
@@ -603,10 +577,13 @@ function parseAutopilotInput(
   };
 }
 
-async function findJobByExternalId(
-  store: JobStore,
-  externalId: string,
-): Promise<JobRecord | null> {
-  const jobs = await store.list();
-  return jobs.find((job) => job.external_id === externalId) ?? null;
+async function appendJsonLine(
+  logPath: string | undefined,
+  event: CodexEvent,
+): Promise<void> {
+  if (!logPath) {
+    return;
+  }
+
+  await fs.appendFile(logPath, `${JSON.stringify(event)}\n`, "utf8");
 }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { extractChatShellCommand } from "./chatCommands.js";
+import {
+  extractChatShellCommand,
+  stripBotMention,
+} from "./chatCommands.js";
 
 describe("extractChatShellCommand", () => {
   it("extracts a backticked command from a mention message", () => {
@@ -39,5 +42,10 @@ describe("extractChatShellCommand", () => {
 
   it("ignores unrelated messages", () => {
     expect(extractChatShellCommand("今日は何する？", "123")).toBeNull();
+  });
+
+  it("strips user and role mentions from prompt text", () => {
+    expect(stripBotMention("<@123> README を直して", "123")).toBe("README を直して");
+    expect(stripBotMention("<@&999> fix tests", undefined, ["999"])).toBe("fix tests");
   });
 });

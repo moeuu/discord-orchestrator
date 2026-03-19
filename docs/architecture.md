@@ -2,97 +2,41 @@
 
 ## Goal
 
-Discord の Slash Command を入口にして、Codex CLI ジョブの作成、状態確認、進捗表示、local / remote runner 切り替えを扱う構成です。
+Discord bot は Railway 上で常時稼働させ、Codex 実行は各マシン上の runner に委譲する。
 
-## Constraints
+## Core Idea
 
-- Codex 実行と Autopilot 実行が主軸
-- Discord の `@mention` は明示 target 指定ならそのまま codex job に落とし、必要なら LLM router で補助する
-- Codex CLI は ChatGPT ログイン済み環境で使う
-- Slash Command が主、`@mention` を使う場合は Message Content Intent を有効化する
-- secrets は `.env` のみに置く
+- bot ごとに 1 つの `BOT_RUNNER_ID` を持つ
+- Discord から来た Codex job はその runner 向けに queue される
+- 実行マシン上の runner が bot の HTTP API を long poll して job を claim する
+- runner は local で `codex exec --json` を実行し、event を bot に返す
+- bot は job store と Discord embed を更新する
 
 ## Components
 
+- `apps/bot/src/index.ts`
+  Railway 上の bot entrypoint
+- `apps/bot/src/dashboard.ts`
+  dashboard API と runner API を同居させた HTTP server
 - `apps/bot/src/discord`
-  Slash Command 定義、登録、Interaction 処理、Embed 生成
-- `apps/bot/src/bridge`
-  Railway 上の bridge service。SSH 経由で remote runner に `codex exec --json` を起動する
+  slash command、mention 処理、Discord embed 更新
 - `apps/bot/src/jobs`
-  Job の型、ストア、runner 抽象、Codex 実行ラッパー
-- `data/jobs.json`
-  開発初期のジョブ保存先。将来 SQLite に置き換える
-- `logs/job-<id>.jsonl`
-  `codex exec --json` のイベントログ保存先
-- `data/workspaces/job-<id>/`
-  clone 済み workspace。Codex CLI はこの Git リポジトリ内で動かす
-- `config/targets.example.yaml`
-  `local` / `macbook` / 将来の家・研究室ターゲット定義テンプレート
+  JobStore、Codex 実行、Autopilot 実行
+- `apps/bot/src/runner`
+  long-polling runner
 
-## Job Model
+## Runner Flow
 
-最低限保存する項目は以下です。
+1. runner が `/api/runner/poll` を long poll
+2. bot が queued job を返し、`running` に更新
+3. runner が local workspace を作って `codex exec --json` を実行
+4. runner が event を `/api/runner/jobs/:id/event` に送る
+5. bot が progress と Discord message を更新する
+6. cancel 時は bot が `cancel_requested_at` を立て、runner heartbeat が abort する
+7. runner が `/finish` を送り、最終 status を閉じる
 
-- `id`
-- `status`
-- `created_at`
-- `updated_at`
-- `started_at`
-- `finished_at`
-- `target`
-- `prompt`
-- `discord_channel_id`
-- `discord_message_id`
-- `pid`
-- `log_path`
+## Why This Shape
 
-初期実装では JSON ストアを使うが、読み書きは `JobStore` 抽象の内側に閉じ込めて SQLite 移行しやすくする。
-
-## Runner Strategy
-
-- `local` runner と `remote bridge` runner を両方持つ
-- remote 実行時は bot が bridge service に依頼し、bridge が SSH 先で `codex exec --json` を起動する
-- `/codex run` は workspace に `git clone` 後、`codex exec --json` を local か remote で起動する
-- `codexExec.ts` は JSONL 保存と `agent_message` 抽出責務を持たせる
-
-## Discord UI Strategy
-
-- ジョブごとに 1 つの進捗メッセージを持つ
-- 初回応答後は同じメッセージを編集し続ける
-- 表示は Embed を基本にする
-- `/codex status` は単体ジョブ表示を優先し、`job_id` 未指定時は最新ジョブを返す
-
-## Flow
-
-1. Discord でスラッシュコマンドを実行
-2. Bot が入力を検証して JobStore にジョブを作成
-3. Bot が進捗 Embed を同一メッセージへ表示
-4. runner が source repo を workspace へ clone して `codex exec --json` を起動
-5. 状態更新ごとにストア更新とメッセージ編集を行う
-6. `/codex status` `/codex logs` `/codex cancel` でジョブを操作する
-
-## MVP Scope
-
-### Step 1
-
-- 設計メモ
-- タスクリスト
-- リポジトリ土台
-
-### Step 2
-
-- `/ping`
-- `/codex status`
-- JSON JobStore
-- Embed 表示の土台
-
-### Step 3
-
-- `/codex run` local runner 実装
-- 同一メッセージ自動更新
-- ログファイル出力の土台
-
-### Later
-
-- 家・研究室 runner 追加
-- runner ごとの優先度や権限制御
+- Railway から各マシンへ SSH/Tailscale で inbound 接続しなくてよい
+- MacBook / 家 / 研究室で同じ runner 実装を再利用できる
+- bot ごとに Discord token と `BOT_RUNNER_ID` を変えるだけで分離できる

@@ -6,21 +6,16 @@ import type {
 import { Events, MessageFlags } from "discord.js";
 
 import type { AppConfig } from "../config.js";
-import { createJobLogStreamer } from "./logStream.js";
-import { startManualAutopilotWatcher } from "../jobs/manualAutopilotWatcher.js";
-import { extractChatShellCommand } from "./chatCommands.js";
+import { extractChatShellCommand, stripBotMention } from "./chatCommands.js";
 import { createChatLlmRouter } from "./chatLlmRouter.js";
 import { createChatSessionStore } from "./chatSessionStore.js";
 import { shouldResetChatSession } from "./chatLlmRouter.js";
-import { extractMentionCodexRequest } from "./codexMention.js";
 import type { JobStore } from "../jobs/store.js";
 import type { Logger } from "../util/logger.js";
-import type { JobRecord, RunnerTarget } from "../jobs/types.js";
-import type { CodexTarget } from "../targets.js";
+import type { JobRecord } from "../jobs/types.js";
 import {
   buildJobEmbed,
   buildJobStatusReply,
-  createJobMessageUpdater,
 } from "./ui.js";
 import type { createJobService } from "../jobs/service.js";
 
@@ -34,12 +29,11 @@ export function attachInteractionHandlers(
   logger: Logger,
   store: JobStore,
   jobs: JobService,
-  targets: CodexTarget[],
+  ui: {
+    updateJobMessage: UpdateJobMessage;
+    streamJobLogs: StreamJobLogs;
+  },
 ): void {
-  const jobMessages = createJobMessageUpdater(client, logger);
-  const logStreamer = createJobLogStreamer(client, store, logger, {
-    useThreads: config.logStreamUseThreads,
-  });
   const chatSessions = createChatSessionStore(config.jobDataDir);
   const chatLlmRouter =
     config.chatLlmEnabled
@@ -54,16 +48,6 @@ export function attachInteractionHandlers(
         )
       : null;
 
-  startManualAutopilotWatcher(
-    client,
-    config,
-    logger,
-    store,
-    jobs,
-    jobMessages.updateJobMessage,
-    logStreamer.streamJobLogs,
-  );
-
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) {
       return;
@@ -75,8 +59,8 @@ export function attachInteractionHandlers(
         config,
         store,
         jobs,
-        jobMessages.updateJobMessage,
-        logStreamer.streamJobLogs,
+        ui.updateJobMessage,
+        ui.streamJobLogs,
       );
       if (response) {
         await interaction.reply(response);
@@ -120,10 +104,7 @@ export function attachInteractionHandlers(
       return;
     }
 
-    if (
-      config.chatCommandsRequireMention &&
-      !mentionsBot
-    ) {
+    if (config.chatCommandsRequireMention && !mentionsBot) {
       logger.info("Ignored message without bot mention", {
         authorId: message.author.id,
         channelId: message.channelId,
@@ -149,31 +130,28 @@ export function attachInteractionHandlers(
       preview: message.content.slice(0, 160),
     });
 
+    const prompt = stripBotMention(
+      message.content,
+      client.user?.id,
+      botRoleIds,
+    ).trim();
     const command = extractChatShellCommand(
       message.content,
       client.user?.id,
       botRoleIds,
     );
+
     try {
-      const directCodexRequest = extractMentionCodexRequest(
-        message.content,
-        targets,
-        config.codexDefaultTarget,
-        client.user?.id,
-        botRoleIds,
-      );
-      if (directCodexRequest) {
-        await launchCodexJob(
-          directCodexRequest.prompt,
+      if (command) {
+        await launchShellJob(
+          command,
           "",
-          directCodexRequest.targetId,
-          message.channelId,
           message.channelId,
           message,
           store,
           jobs,
-          jobMessages.updateJobMessage,
-          chatSessions,
+          ui.updateJobMessage,
+          ui.streamJobLogs,
         );
         return;
       }
@@ -215,8 +193,8 @@ export function attachInteractionHandlers(
               message,
               store,
               jobs,
-              jobMessages.updateJobMessage,
-              logStreamer.streamJobLogs,
+              ui.updateJobMessage,
+              ui.streamJobLogs,
             );
             return;
           case "codex":
@@ -227,32 +205,32 @@ export function attachInteractionHandlers(
             await launchCodexJob(
               action.codex_prompt,
               action.message,
-              config.codexDefaultTarget,
+              config.botRunnerId,
               message.channelId,
               message.channelId,
               message,
               store,
               jobs,
-              jobMessages.updateJobMessage,
               chatSessions,
             );
             return;
-          }
+        }
       }
 
-      if (!command) {
+      if (!prompt) {
         return;
       }
 
-      await launchShellJob(
-        command,
+      await launchCodexJob(
+        prompt,
         "",
+        config.botRunnerId,
+        message.channelId,
         message.channelId,
         message,
         store,
         jobs,
-        jobMessages.updateJobMessage,
-        logStreamer.streamJobLogs,
+        chatSessions,
       );
     } catch (error) {
       logger.error("Chat command failed", error);
@@ -295,7 +273,7 @@ async function launchShellJob(
 async function launchCodexJob(
   prompt: string,
   prefixMessage: string,
-  targetId: string,
+  runnerId: string,
   discordChannelId: string,
   sessionKey: string,
   message: {
@@ -303,14 +281,12 @@ async function launchCodexJob(
   },
   store: JobStore,
   jobs: JobService,
-  updateJobMessage: UpdateJobMessage,
   chatSessions: ReturnType<typeof createChatSessionStore>,
 ): Promise<void> {
   const session = await chatSessions.get(sessionKey);
-  const { target, runnerId } = resolveCodexLaunchTarget(targetId);
   let job = await jobs.createJob({
     prompt,
-    target,
+    target: "runner",
     runnerId,
     discordChannelId,
     externalId: session?.threadId,
@@ -323,13 +299,6 @@ async function launchCodexJob(
     discord_message_id: reply.id,
   });
   await reply.edit({ embeds: [buildJobEmbed(job)] });
-
-  void jobs.startJob(job.id, async (updatedJob) => {
-    if (updatedJob.external_id) {
-      await chatSessions.set(sessionKey, updatedJob.external_id);
-    }
-    await updateJobMessage(updatedJob);
-  });
 }
 
 async function handleSlashCommand(
@@ -349,7 +318,6 @@ async function handleSlashCommand(
         config,
         store,
         jobs,
-        updateJobMessage,
       );
     case "autopilot":
       return await handleAutopilotCommand(
@@ -373,7 +341,6 @@ async function handleCodexCommand(
   config: AppConfig,
   store: JobStore,
   jobs: JobService,
-  updateJobMessage: UpdateJobMessage,
 ): Promise<InteractionReplyOptions | null> {
   const subcommand = interaction.options.getSubcommand();
 
@@ -384,13 +351,7 @@ async function handleCodexCommand(
       return buildJobStatusReply(job);
     }
     case "run":
-      await handleCodexRun(
-        interaction,
-        config,
-        store,
-        jobs,
-        updateJobMessage,
-      );
+      await handleCodexRun(interaction, config, store, jobs);
       return null;
     case "logs":
       return await handleLogs(interaction, jobs);
@@ -441,19 +402,16 @@ async function handleCodexRun(
   config: AppConfig,
   store: JobStore,
   jobs: JobService,
-  updateJobMessage: UpdateJobMessage,
 ): Promise<void> {
   const prompt = interaction.options.getString("prompt", true);
-  const requestedTarget = interaction.options.getString("target") ?? config.codexDefaultTarget;
-  const { target, runnerId } = resolveCodexLaunchTarget(requestedTarget);
   const discordChannelId = interaction.channelId ?? "unknown";
 
   await interaction.deferReply();
 
   let job = await jobs.createJob({
     prompt,
-    target,
-    runnerId,
+    target: "runner",
+    runnerId: config.botRunnerId,
     discordChannelId,
   });
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
@@ -463,10 +421,6 @@ async function handleCodexRun(
     discord_message_id: reply.id,
   });
   await interaction.editReply({ embeds: [buildJobEmbed(job)] });
-
-  void jobs.startJob(job.id, async (updatedJob) => {
-    await updateJobMessage(updatedJob);
-  });
 }
 
 async function handleAutopilotRun(
@@ -482,8 +436,6 @@ async function handleAutopilotRun(
   const compute = interaction.options.getString("compute") ?? "local_gpu";
   const maxIterations = interaction.options.getInteger("max_iterations") ?? 5;
   const dryRun = interaction.options.getBoolean("dry_run") ?? true;
-  const runnerId = interaction.options.getString("runner") ?? "lab_rdp";
-  const target = runnerId === "local" ? "local" : "ssh";
   const discordChannelId = interaction.channelId ?? "unknown";
 
   await interaction.deferReply();
@@ -494,8 +446,7 @@ async function handleAutopilotRun(
     compute,
     maxIterations,
     dryRun,
-    target,
-    runnerId,
+    target: "local",
     discordChannelId,
     dashboardBaseUrl: config.dashboardBaseUrl,
   });
@@ -568,19 +519,4 @@ function truncateLog(value: string): string {
   }
 
   return `${value.slice(-1800)}`;
-}
-
-function resolveCodexLaunchTarget(value: string): {
-  target: RunnerTarget;
-  runnerId?: string;
-} {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "local") {
-    return { target: "local" };
-  }
-
-  return {
-    target: "ssh",
-    runnerId: normalized,
-  };
 }

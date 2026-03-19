@@ -1,4 +1,4 @@
-export type RunnerTarget = "local" | "ssh";
+export type RunnerTarget = "local" | "runner";
 export type JobTool = "codex" | "autopilot" | "shell";
 
 export type JobStatus =
@@ -54,6 +54,7 @@ export type Job = {
   finished_at?: string;
   summary?: string;
   runner_id?: string;
+  cancel_requested_at?: string;
   dashboard_url?: string;
   artifact_root?: string;
   input?: Record<string, unknown>;

@@ -20,12 +20,16 @@ describe("config", () => {
     process.env.DISCORD_APP_ID = "app-id";
     process.env.DISCORD_GUILD_ID = "guild-id";
     process.env.WORKSPACE_SOURCE_REPO = "git@github.com:moeuu/discord-orchestrator.git";
+    process.env.BOT_RUNNER_ID = "macbook";
+    process.env.RUNNER_API_TOKEN = "runner-token";
 
     const config = loadConfig();
 
     expect(config.workspaceSourceRepo).toBe(
       "git@github.com:moeuu/discord-orchestrator.git",
     );
+    expect(config.botRunnerId).toBe("macbook");
+    expect(config.runnerApiToken).toBe("runner-token");
   });
 
   it("derives storage paths and dashboard url from deployment env", () => {
@@ -38,6 +42,7 @@ describe("config", () => {
     process.env.LOG_DIR = "";
     process.env.PORT = "3100";
     process.env.RAILWAY_PUBLIC_DOMAIN = "discord-orchestrator.up.railway.app";
+    process.env.BOT_RUNNER_ID = "macbook";
 
     const config = loadConfig();
 
